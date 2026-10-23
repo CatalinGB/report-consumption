@@ -1,0 +1,9 @@
+{
+  "name": "Submission electricity-b",
+  "object_id": "submission_electricity_b",
+  "unique_id": "meters_submission_demo_electricity_b",
+  "state_topic": "meters/casa/last/electricity-b",
+  "value_template": "{{ value_json.period }}",
+  "json_attributes_topic": "meters/casa/last/electricity-b",
+  "icon": "mdi:calendar-check"
+}

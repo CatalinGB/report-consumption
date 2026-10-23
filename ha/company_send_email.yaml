@@ -1,0 +1,134 @@
+# Email sender used by company_submit. Import it as a script; the alias is
+# `company_send_email`, so a UI import creates script.company_send_email.
+# From configuration.yaml:
+#
+#   script:
+#     company_send_email: !include ha/company_send_email.yaml
+#
+# The script is deliberately separate: if notify.send_message fails, the
+# script stops before writing `forwarded`, and the caller can publish an
+# `error` status. A single script cannot both fail and run a cleanup action.
+alias: "company_send_email"
+description: >-
+  Send one CATD-style index e-mail through a private notify entity and publish
+  the retained `forwarded` status only after the SMTP action returned without
+  an error. Contract values are passed in from the private company mapping and
+  are never written to MQTT.
+
+fields:
+  status_topic:
+    name: Status topic
+    required: true
+    selector:
+      text:
+  meter_id:
+    name: Meter id
+    required: true
+    selector:
+      text:
+  meter_name:
+    name: Meter name
+    required: true
+    selector:
+      text:
+  period:
+    name: Period
+    required: true
+    selector:
+      text:
+  index:
+    name: Index
+    required: true
+    selector:
+      text:
+  previous_index:
+    name: Previous index
+    default: null
+    selector:
+      text:
+  delta:
+    name: Delta
+    default: null
+    selector:
+      text:
+  unit:
+    name: Unit
+    default: ""
+    selector:
+      text:
+  smtp_service:
+    name: SMTP notify entity
+    required: true
+    selector:
+      text:
+  contract_holder:
+    name: Contract holder
+    required: true
+    selector:
+      text:
+  contract_address:
+    name: Contract address
+    required: true
+    selector:
+      text:
+  cod_client:
+    name: Client code
+    required: true
+    selector:
+      text:
+  center:
+    name: Operating centre
+    default: ""
+    selector:
+      text:
+
+sequence:
+  - action: notify.send_message
+    target:
+      entity_id: "{{ smtp_service }}"
+    data:
+      title: "Transmitere index apometru – {{ contract_holder }} – {{ period }}"
+      message: >-
+        Bună ziua,
+
+        Transmit indexul autocitit pentru contractul cu codul de client {{ cod_client }}.
+
+        Titular contract: {{ contract_holder }}
+        Adresă: {{ contract_address }}
+        Cod client / abonat: {{ cod_client }}
+        Contor: {{ meter_name }}
+        Index vechi: {{ previous_index if previous_index not in [none, '', 'None'] else '—' }} {{ unit }}
+        Index nou: {{ index }} {{ unit }}
+        Consum: {{ delta if delta not in [none, '', 'None'] else '—' }} {{ unit }}
+        Data citirii: {{ now().strftime('%d.%m.%Y %H:%M') }}
+
+        Vă rog să confirmați înregistrarea indexului.
+
+        Cu stimă,
+        {{ contract_holder }}
+  - action: mqtt.publish
+    data:
+      topic: "{{ status_topic }}"
+      qos: 1
+      retain: true
+      payload: >-
+        {{ {'v': 1, 'meter_id': meter_id, 'period': period,
+            'state': 'forwarded', 'index': index | float(0),
+            'previous_index': (previous_index | float(0)) if previous_index not in [none, '', 'None'] else none,
+            'delta': (delta | float(0)) if delta not in [none, '', 'None'] else none,
+            'by': 'company_submitter', 'gate': 'on',
+            'updated_at': now().isoformat(),
+            'detail': 'SMTP accepted the message; no delivery confirmation'} | tojson }}
+  - action: script.notify_admin
+    continue_on_error: true
+    data:
+      title: "Email trimis — {{ meter_name }}"
+      message: >-
+        {{ period }}: indexul {{ index }} {{ unit }} a fost trimis prin SMTP
+        către centrul {{ center or '—' }}. Verifică răspunsul CATD.
+      data:
+        url: "https://YOUR_GITHUB_USER.github.io/report-consumption/admin.html"
+        url_title: "Open administration"
+
+mode: queued
+max: 5

@@ -1,0 +1,68 @@
+alias: "Meters — water sent watcher"
+description: >-
+  Watches the current-index sensors listed in the private
+  sensor.meter_operations.sources mapping. When one changes to a real value, it
+  tells the company submitter the old value, new value and delta. This is a
+  notification-only path; the app never submits water to the company. A source
+  entity is resolved through the private mapping at event time because state
+  triggers cannot be templated.
+mode: single
+triggers:
+  - trigger: event
+    event_type: state_changed
+conditions:
+  - condition: template
+    value_template: >-
+      {{ trigger.event.data is defined and
+         trigger.event.data.entity_id is defined and
+         trigger.event.data.new_state is defined and
+         trigger.event.data.new_state is not none and
+         trigger.event.data.new_state.state not in ['unknown', 'unavailable'] and
+         (trigger.event.data.old_state is none or
+          trigger.event.data.old_state.state != trigger.event.data.new_state.state) }}
+actions:
+  - variables:
+      sources: "{{ state_attr('sensor.meter_operations', 'sources') or {} }}"
+      entity_id: "{{ trigger.event.data.entity_id }}"
+      source_meter_id: >-
+        {%- set ns = namespace(meter_id='') -%}
+        {%- for mid, eid in (sources.items() if sources is mapping else []) -%}
+          {%- if eid == entity_id and not ns.meter_id -%}
+            {%- set ns.meter_id = mid -%}
+          {%- endif -%}
+        {%- endfor -%}
+        {{- ns.meter_id -}}
+  - condition: template
+    value_template: "{{ source_meter_id != '' }}"
+  - condition: template
+    value_template: "{{ trigger.event.data.new_state.state | float(none) is not none }}"
+  - variables:
+      previous: "{{ trigger.event.data.old_state.state if trigger.event.data.old_state is not none else none }}"
+      current: "{{ trigger.event.data.new_state.state }}"
+      delta: >-
+        {% if previous is not none and previous not in ['unknown', 'unavailable'] %}
+          {{ (current | float(0)) - (previous | float(0)) }}
+        {% else %}
+          prima valoare
+        {% endif %}
+      meters: "{{ (state_attr('sensor.meters_config', 'meters') or []) | select('mapping') | list }}"
+      houses: "{{ (state_attr('sensor.meters_config', 'houses') or []) | select('mapping') | list }}"
+      meter_matches: "{{ meters | selectattr('id', 'equalto', source_meter_id) | list }}"
+      meter: "{{ meter_matches[0] if meter_matches else none }}"
+      house_id: "{{ meter.get('house_id') if meter is mapping else '' }}"
+      house_matches: "{{ houses | selectattr('id', 'equalto', house_id) | list if house_id else [] }}"
+      house: "{{ house_matches[0] if house_matches else none }}"
+      house_name: "{{ (house.get('name') or house_id) if house else (house_id or 'Casa') }}"
+      meter_name: "{{ meter.get('name', source_meter_id) if meter is mapping else source_meter_id }}"
+      unit: "{{ meter.get('unit', '') if meter is mapping else '' }}"
+  - action: script.notify_admin
+    data:
+      title: "Apă — {{ house_name }}"
+      message: >-
+        {{ meter_name }}: index nou {{ current }} {{ unit }}.
+        Anterior: {{ previous if previous is not none else '—' }}.
+        Diferență: {{ delta }} {{ unit }}.
+        Actualizat: {{ trigger.event.data.new_state.last_changed.strftime('%d.%m.%Y %H:%M') }}.
+      data:
+        url: "https://YOUR_GITHUB_USER.github.io/report-consumption/admin.html"
+        url_title: "Open administration"

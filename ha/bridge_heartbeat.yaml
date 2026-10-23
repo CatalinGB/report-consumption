@@ -1,0 +1,17 @@
+alias: "Meters — bridge heartbeat"
+description: >-
+  Publishes a retained heartbeat to the local broker every five minutes. The
+  bridge forwards it to Flespi; tools/healthcheck-bridge.js checks that the
+  heartbeat is fresh on the Flespi side.
+mode: single
+triggers:
+  - trigger: time_pattern
+    minutes: "/5"
+actions:
+  - action: mqtt.publish
+    data:
+      topic: "meters/casa/status/ha-heartbeat"
+      qos: 1
+      retain: true
+      payload: >-
+        {{ {'at': now().isoformat(), 'by': 'ha'} | tojson }}

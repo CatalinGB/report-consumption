@@ -1,0 +1,9 @@
+{
+  "name": "Meters config",
+  "object_id": "meters_config",
+  "unique_id": "meters_config_casa_v2",
+  "state_topic": "meters/casa/config",
+  "value_template": "{{ value_json.updated_at }}",
+  "json_attributes_topic": "meters/casa/config",
+  "icon": "mdi:meter-electric"
+}

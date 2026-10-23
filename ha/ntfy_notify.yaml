@@ -1,0 +1,79 @@
+# Import this file as a script. The alias is deliberately `ntfy_notify`, so a
+# UI import creates script.ntfy_notify. When loading it from
+# configuration.yaml, key it explicitly:
+#
+#   script:
+#     ntfy_notify: !include ha/ntfy_notify.yaml
+#
+# The ntfy topic never enters Home Assistant; it stays on the listener host.
+# Do not pass PII: no house/meter name, index, period, address, contract/client
+# code, token or installation id. Admin callers must use script.notify_admin.
+alias: "ntfy_notify"
+description: >-
+  Publish one notification envelope for the local MQTT-to-ntfy listener.
+  `action_label` is the label the listener should use for the ntfy action
+  button when `url` is set. The listener maps it to an ntfy `actions` entry;
+  older listeners ignore the field and still open `url` on tap.
+
+fields:
+  title:
+    name: Title
+    description: Short notification title.
+    required: true
+    selector:
+      text:
+  message:
+    name: Message
+    description: Notification body.
+    required: true
+    selector:
+      text:
+        multiline: true
+  priority:
+    name: Priority
+    description: ntfy priority (min, low, default, high, max, or 1-5).
+    default: default
+    selector:
+      text:
+  tags:
+    name: Tags
+    description: Comma-separated ntfy tags, for example bell,warning.
+    default: bell
+    selector:
+      text:
+  url:
+    name: Click URL
+    description: Optional URL opened when the notification is tapped.
+    default: ""
+    selector:
+      text:
+  action_label:
+    name: Action label
+    description: Visible label for the URL action, for example "Open index reporting page".
+    default: "Open link"
+    selector:
+      text:
+
+sequence:
+  - if:
+      - condition: template
+        value_template: >-
+          {{ url is defined and url != "" and (("?" in url) or ("#" in url)) }}
+    then:
+      - stop: "refusing notification URL with query/fragment identifier"
+
+  - action: mqtt.publish
+    data:
+      topic: meters/casa/status/ntfy
+      qos: 1
+      retain: false
+      payload: >-
+        {{ {'v': 1, 'title': title, 'message': message,
+            'priority': priority | default('default'),
+            'tags': tags | default('bell'),
+            'url': url | default(''),
+            'action_label': action_label | default('Open link'),
+            'at': now().isoformat()} | tojson }}
+
+mode: parallel
+max: 20

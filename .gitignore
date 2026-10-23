@@ -1,0 +1,41 @@
+node_modules/
+.env
+.env.*
+.env.ntfy
+*.local
+tools/certs/ca.key
+.DS_Store
+
+# Playwright MCP artifacts
+.playwright-mcp/
+
+# Private planning notes and real deployment seed (never public)
+.scratch/
+config/seed.local.json
+docs/private/
+pii-replacements.txt
+
+# Rendered bridge config contains the home token
+ha/flespi-bridge.conf
+backups/
+
+# Keys and credential files (the test key below is explicitly allowed)
+*.pem
+*.key
+*.p12
+*.pfx
+secrets.yaml
+secrets.yml
+
+# Generated local test certificates
+tools/certs/server.key
+tools/certs/server.crt
+tools/certs/ca.crt
+tools/certs/ca.key
+tools/certs/san.ext
+tools/certs/*.csr
+tools/certs/*.srl
+
+# Real HA mapping (provider entity ids and contract data)
+ha/*.private.yaml
+ha/private/

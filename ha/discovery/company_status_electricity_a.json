@@ -1,0 +1,9 @@
+{
+  "name": "Company status electricity-a",
+  "object_id": "company_status_electricity_a",
+  "unique_id": "meters_company_status_demo_electricity_a",
+  "state_topic": "meters/casa/status/electricity-a/+",
+  "value_template": "{{ value_json.state }}",
+  "json_attributes_topic": "meters/casa/status/electricity-a/+",
+  "icon": "mdi:send-check"
+}

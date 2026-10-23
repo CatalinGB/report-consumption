@@ -1,0 +1,16 @@
+# Global company-publishing gate.
+#
+# `initial: false` means the gate returns to suppressed after every HA restart.
+# It only protects the final company submission; readings, reminders and
+# notifications keep working while it is off.
+#
+# You can create the same helper in
+# Settings -> Devices & services -> Helpers -> Create helper -> Toggle, named
+# "Publicare companie" (entity id input_boolean.publicare_companie). Use one
+# method or the other, not both. If the helper already exists, do not import
+# this file: a duplicate YAML definition conflicts with the UI helper.
+input_boolean:
+  publicare_companie:
+    name: Publicare companie
+    icon: mdi:send-lock
+    initial: false

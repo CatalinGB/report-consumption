@@ -1,0 +1,81 @@
+# PRIVATE Home Assistant mapping for Report Consumption — MQTT schema 3.
+#
+# This file is an EXAMPLE ONLY. Copy it to a private HA file, replace the
+# placeholder entity ids and contract values, and load it in Home Assistant.
+# Never publish these values in the retained MQTT config, never commit them to
+# this repository, and never paste them into an issue.
+#
+# The automations in this package expect exactly one entity:
+#   sensor.meter_operations
+# A template sensor derives its entity id from `name`, so keep the name (or
+# rename the entity and update every automation). If another entity already
+# owns that id, HA will create sensor.meter_operations_2 and the automations
+# will silently see an empty mapping.
+#
+# Load it as an HA package, for example in configuration.yaml:
+#
+#   homeassistant:
+#     packages:
+#       meter_operations: !include meter_operations.private.yaml
+#
+# Do not add this entity to a dashboard, and do not expose it through MQTT.
+# It is the replacement for meters[].notify, meters[].forwarding and
+# meters[].source.entity_id from schema 2.
+
+template:
+  - sensor:
+      - name: Meter operations
+        unique_id: meter_operations_private
+        state: "ok"
+        icon: mdi:account-key
+        attributes:
+          # Who is responsible for reading/submitting a meter.
+          #
+          # target: index_submitter  -> the person who reads the meter. The
+          #   reminder automation calls script.notify_index_submitter (ntfy,
+          #   generic, PII-free).
+          # target: company_submitter -> the account owner/operator. The
+          #   reminder automation calls script.notify_admin (Pushover to
+          #   kalioPhone, operational detail allowed; never an address).
+          #
+          # Legacy mother/reporter targets are treated as index_submitter;
+          # legacy admin as company_submitter during migration.
+          # Missing meters default to company_submitter.
+          routes:
+            electricity-a:
+              target: index_submitter
+            electricity-b:
+              target: company_submitter
+            water-a:
+              target: index_submitter
+            water-c:
+              target: company_submitter
+
+          # How HA may submit a meter's index to the provider.
+          #
+          # mode: none     -> never propose or submit.
+          # mode: approve  -> provider number/button entities (see below).
+          # mode: email    -> SMTP notify entity and contract details.
+          #
+          # `smtp_service` is a Home Assistant notify entity whose recipient is
+          # configured in the UI. The recipient address never appears here.
+          company:
+            electricity-a:
+              mode: approve
+              number_entity: number.example_index_de_transmis
+              submit_button: button.example_trimite_index
+              citire_entity: sensor.example_citire_permisa
+              index_entity: sensor.example_index_companie
+            water-c:
+              mode: email
+              smtp_service: notify.example_catd
+              contract_holder: "<private contract holder>"
+              contract_address: "<private contract address>"
+              cod_client: "<private client code>"
+              center: "<private operating centre>"
+
+          # Automatic/current-index sensors for meters reported outside the
+          # form (for example a smart water meter). The water sent watcher reads
+          # this mapping; it never publishes to the company.
+          sources:
+            water-a: sensor.example_water_index

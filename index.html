@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="ro">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self' wss://mqtt.flespi.io wss://mqtt.flespi.io:443 ws://localhost:8084 wss://localhost:8084 ws://localhost:8083; manifest-src 'self'; worker-src 'self' blob:; base-uri 'none'; object-src 'none'">
+  <title>Raport Index</title>
+  <meta name="theme-color" content="#0f1115">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon-192.png">
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">Index submitter <span class="muted">· Raport index</span></div>
+    <div class="top-actions">
+      <span id="conn" class="pill pill--off">Deconectat</span>
+      <button id="lang" class="ghost" type="button" aria-label="Schimbă limba">EN</button>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <div id="toast" class="toast" hidden role="status"></div>
+
+    <section id="setup" class="card" hidden>
+      <h1 data-i18n="setup_title">Conectare</h1>
+      <p class="muted" data-i18n="setup_hint">Introdu datele primite de la administrator.</p>
+      <form id="setup-form" class="form">
+        <label>
+          <span data-i18n="installation">Instalație</span>
+          <input id="installation" name="installation" autocomplete="off" spellcheck="false" required>
+        </label>
+        <label>
+          <span data-i18n="token">Token MQTT</span>
+          <input id="token" name="token" type="password" autocomplete="off" spellcheck="false" required>
+        </label>
+        <details class="advanced">
+          <summary data-i18n="advanced">Avansat</summary>
+          <label>
+            <span data-i18n="broker">Broker</span>
+            <input id="broker" name="broker" autocomplete="off" spellcheck="false">
+          </label>
+        </details>
+        <button class="primary" type="submit" data-i18n="connect">Conectează</button>
+      </form>
+    </section>
+
+    <section id="waiting" class="card" hidden>
+      <div class="spinner" aria-hidden="true"></div>
+      <h1 data-i18n="waiting">Se așteaptă configurația…</h1>
+      <p class="muted" data-i18n="waiting_hint">Administratorul trebuie să publice configurația în MQTT.</p>
+      <p id="waiting-detail" class="mono muted"></p>
+    </section>
+
+    <section id="meters" class="meters" hidden aria-live="polite"></section>
+
+    <p id="fatal" class="fatal" hidden></p>
+  </main>
+
+  <footer class="footer">
+    <a href="admin.html" data-i18n="admin">Administrare</a>
+    <div class="footer-right">
+      <button id="reset" class="ghost" type="button" data-i18n="reset">Resetează</button>
+      <span id="installation-label" class="mono muted"></span>
+    </div>
+  </footer>
+
+  <noscript>
+    <p class="fatal">Pagina are nevoie de JavaScript.</p>
+  </noscript>
+
+  <script src="mqtt.min.js"></script>
+  <script src="js/common.js"></script>
+  <script src="js/schema.js"></script>
+  <script src="js/period.js"></script>
+  <script src="js/anomaly.js"></script>
+  <script src="js/photo.js"></script>
+  <script src="js/reporter.js"></script>
+</body>
+</html>

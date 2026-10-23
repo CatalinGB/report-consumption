@@ -1,0 +1,107 @@
+alias: "Meters — company preflight"
+description: >-
+  After a fresh last-submission pointer, write a retained `proposed` status for
+  meters whose private company mapping is mode approve or email. It never
+  submits to the company. The preflight does not send a notification: the
+  index submitter's `meters/<installation>/event/index` event is handled by
+  new_index_notify, which notifies the company submitter once. The proposal is
+  written only when the retained status is not already
+  accepted/forwarded/suppressed/sending (or an uncertain error). Where possible
+  it also verifies the last-topic meter id, the submission sensor period and
+  its index attribute before overwriting a proposal.
+mode: queued
+max: 10
+triggers:
+  - trigger: mqtt
+    topic: meters/casa/last/+
+    qos: 1
+# HA has no generic "read an arbitrary retained topic" action. The
+# last/<meter> pointer carries the same submission payload, and the discovery
+# entity mirrors its period/index attributes, so those are the retained checks
+# available here. The final condition below verifies the topic suffix, the
+# submission sensor period and its index attribute.
+conditions:
+  - condition: template
+    value_template: >-
+      {{ trigger.payload_json is defined and
+         trigger.payload_json is mapping and
+         trigger.payload_json.meter_id is defined and
+         trigger.payload_json.period is defined and
+         trigger.payload_json.period is string and
+         trigger.payload_json.period.split('-') | length == 2 and
+         (trigger.payload_json.period.split('-')[1] | int) >= 1 and
+         (trigger.payload_json.period.split('-')[1] | int) <= 12 and
+         trigger.payload_json.index is defined and
+         trigger.payload_json.index is number and
+         trigger.payload_json.submitted_at is defined and
+         trigger.payload_json.submitted_at is string and
+         trigger.topic.split('/') | last == trigger.payload_json.meter_id }}
+actions:
+  - variables:
+      payload: "{{ trigger.payload_json }}"
+      meter_id: "{{ payload.meter_id }}"
+      period: "{{ payload.period }}"
+      index: "{{ payload.index }}"
+      previous_index: "{{ payload.previous_index if payload.previous_index is defined else none }}"
+      previous_at: "{{ payload.previous_at if payload.previous_at is defined else none }}"
+      delta: "{{ payload.delta if payload.delta is defined else none }}"
+      submitted_by: "{{ payload.get('submitted_by', 'index_submitter') if payload.submitted_by is defined else 'index_submitter' }}"
+      range_state: "{{ payload.get('range_state') if payload.range_state is defined else none }}"
+      meters: "{{ (state_attr('sensor.meters_config', 'meters') or []) | select('mapping') | list }}"
+      houses: "{{ (state_attr('sensor.meters_config', 'houses') or []) | select('mapping') | list }}"
+      meter_matches: "{{ meters | selectattr('id', 'equalto', meter_id) | list }}"
+      meter: "{{ meter_matches[0] if meter_matches else none }}"
+      house_id: "{{ meter.get('house_id') if meter is mapping else '' }}"
+      house_matches: "{{ houses | selectattr('id', 'equalto', house_id) | list if house_id else [] }}"
+      house: "{{ house_matches[0] if house_matches else none }}"
+      house_name: "{{ (house.get('name') or house_id) if house else (house_id or 'Casa') }}"
+      ops_company: "{{ state_attr('sensor.meter_operations', 'company') or {} }}"
+      company_entry: "{{ ops_company.get(meter_id) if ops_company is mapping else none }}"
+      company: "{{ company_entry if company_entry is mapping else {} }}"
+      company_mode: "{{ company.get('mode', 'none') }}"
+      status_entity: "sensor.company_status_{{ meter_id | string | replace('-', '_') }}"
+      status_state: "{{ states(status_entity) }}"
+      status_period: "{{ state_attr(status_entity, 'period') }}"
+      status_uncertain: "{{ state_attr(status_entity, 'uncertain') | bool }}"
+      status_protected: >-
+        {{ status_period == period and
+           status_state in ['accepted', 'forwarded', 'suppressed', 'sending'] }}
+      status_uncertain_guard: >-
+        {{ status_period == period and status_state == 'error' and status_uncertain }}
+      submission_sensor: "sensor.submission_{{ meter_id | string | replace('-', '_') }}"
+      submission_period: "{{ states(submission_sensor) }}"
+      submission_index: "{{ state_attr(submission_sensor, 'index') }}"
+      submission_ok: >-
+        {{ submission_period == period }}
+      submission_index_ok: >-
+        {{ submission_index is not none and
+           (submission_index | float(-1)) == (index | float(-2)) }}
+      gate: "{{ 'on' if is_state('input_boolean.publicare_companie', 'on') else 'off' }}"
+      status_payload: >-
+        {% set p = {'v': 1, 'meter_id': meter_id, 'period': period,
+                    'house_id': house_id, 'state': 'proposed',
+                    'index': index, 'previous_index': previous_index,
+                    'previous_at': previous_at, 'delta': delta,
+                    'proposed_at': now().isoformat(), 'gate': gate,
+                    'by': 'ha', 'submitted_by': submitted_by,
+                    'submitted_at': payload.get('submitted_at')} %}
+        {% if range_state is not none %}
+          {% set _ = p.update({'range_state': range_state}) %}
+        {% endif %}
+        {{ p | tojson }}
+  - condition: template
+    value_template: >-
+      {{ meter is mapping and
+         meter.get('reading_mode', 'manual') != 'external' and
+         meter.get('reporting', 'manual') not in ['smart', 'sensor'] and
+         company_mode in ['approve', 'email'] and
+         not (status_protected | bool) and
+         not (status_uncertain_guard | bool) and
+         (submission_ok | bool) and
+         (submission_index_ok | bool) }}
+  - action: mqtt.publish
+    data:
+      topic: "meters/casa/status/{{ meter_id }}/{{ period }}"
+      qos: 1
+      retain: true
+      payload: "{{ status_payload }}"

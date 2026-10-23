@@ -1,0 +1,191 @@
+{
+  "v": 1,
+  "schema": 3,
+  "installation": "demo",
+  "updated_at": "2026-01-01T00:00:00Z",
+  "timezone": "Europe/Bucharest",
+  "locale": "ro",
+  "houses": [
+    {
+      "id": "house-a",
+      "name": "House A",
+      "order": 1,
+      "visible": false
+    },
+    {
+      "id": "house-b",
+      "name": "House B",
+      "order": 2,
+      "visible": true
+    }
+  ],
+  "meters": [
+    {
+      "id": "electricity-a",
+      "house_id": "house-a",
+      "name": "Electricity A",
+      "kind": "electricity",
+      "provider": "Provider A",
+      "unit": "kWh",
+      "precision": 0,
+      "visible": true,
+      "baseline": {
+        "index": 1000,
+        "at": "2026-01-01"
+      },
+      "typical_month": 200,
+      "window": {
+        "type": "monthly",
+        "open_day": 19,
+        "open_time": "09:00",
+        "close_day": 25,
+        "close_time": "23:59"
+      },
+      "thresholds": {
+        "mode": "absolute",
+        "warn_margin": 50,
+        "refuse_margin": 100
+      },
+      "photo": {
+        "enabled": true,
+        "max_kb": 512
+      },
+      "reading_mode": "manual"
+    },
+    {
+      "id": "water-a",
+      "house_id": "house-a",
+      "name": "Water A",
+      "kind": "water",
+      "provider": "Provider B",
+      "unit": "m³",
+      "precision": 3,
+      "visible": true,
+      "baseline": {
+        "index": 0,
+        "at": "2026-01-01"
+      },
+      "typical_month": 4,
+      "window": {
+        "type": "monthly",
+        "open_day": 28,
+        "open_time": "09:00",
+        "close_day": 2,
+        "close_time": "23:59"
+      },
+      "thresholds": {
+        "mode": "absolute",
+        "warn_margin": 2,
+        "refuse_margin": 4
+      },
+      "photo": {
+        "enabled": true,
+        "max_kb": 512
+      },
+      "reading_mode": "external"
+    },
+    {
+      "id": "water-c",
+      "house_id": "house-b",
+      "name": "Water C",
+      "kind": "water",
+      "provider": "Provider D",
+      "unit": "m³",
+      "precision": 3,
+      "visible": false,
+      "baseline": null,
+      "typical_month": 4,
+      "window": {
+        "type": "monthly",
+        "open_day": 1,
+        "open_time": "09:00",
+        "close_day": 12,
+        "close_time": "23:59"
+      },
+      "thresholds": {
+        "mode": "absolute",
+        "warn_margin": 2,
+        "refuse_margin": 4
+      },
+      "photo": {
+        "enabled": true,
+        "max_kb": 512
+      },
+      "reading_mode": "manual"
+    },
+    {
+      "id": "electricity-b",
+      "house_id": "house-b",
+      "name": "Electricity B",
+      "kind": "electricity",
+      "provider": "Provider A",
+      "unit": "kWh",
+      "precision": 0,
+      "visible": true,
+      "baseline": {
+        "index": 500,
+        "at": "2026-01-01"
+      },
+      "typical_month": 150,
+      "window": null,
+      "thresholds": {
+        "mode": "absolute",
+        "warn_margin": 50,
+        "refuse_margin": 100
+      },
+      "photo": {
+        "enabled": false,
+        "max_kb": 512
+      },
+      "reading_mode": "manual"
+    },
+    {
+      "id": "gas-a",
+      "house_id": "house-a",
+      "name": "Gas A",
+      "kind": "gas",
+      "provider": "Provider C",
+      "unit": "m³",
+      "precision": 0,
+      "visible": true,
+      "baseline": {
+        "index": 100,
+        "at": "2026-01-01"
+      },
+      "typical_month": null,
+      "typical_by_month": {
+        "01": 50,
+        "02": 45,
+        "03": 35,
+        "04": 25,
+        "05": 15,
+        "06": 8,
+        "07": 6,
+        "08": 6,
+        "09": 8,
+        "10": 15,
+        "11": 30,
+        "12": 45
+      },
+      "window": {
+        "type": "monthly",
+        "open_day": 21,
+        "open_time": "09:00",
+        "close_day": 25,
+        "close_time": "23:59"
+      },
+      "thresholds": {
+        "mode": "percent",
+        "warn_pct": 40,
+        "refuse_pct": 80
+      },
+      "photo": {
+        "enabled": false,
+        "max_kb": 512
+      },
+      "reading_mode": "manual",
+      "consumption_unit": "m³",
+      "consumption_factor": 1
+    }
+  ]
+}

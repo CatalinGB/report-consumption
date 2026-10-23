@@ -1,0 +1,574 @@
+alias: "Meters — company submit"
+description: >-
+  Consumes an explicit approve/suppress command for one meter+period. The
+  private sensor.meter_operations.company mapping replaces meters[].forwarding.
+  Approval requires the retained status to still be `proposed` with the same
+  index and period, a numeric index, a fresh command `at` (10 minutes) and the
+  global publicare_companie gate. Suppress writes a durable retained
+  `suppressed` state, so a later approve for the same period is refused.
+  E-mail mode requires a configured window and performs a full open/close
+  date-time check; a proposal carrying range_state=refuse is rejected. E-mail
+  writes `sending` before SMTP, and `error` + an admin notification if SMTP
+  fails or the send cannot be confirmed. Commands are non-retained.
+mode: queued
+max: 20
+triggers:
+  - trigger: mqtt
+    topic: meters/casa/command/+/+
+    qos: 1
+conditions:
+  - condition: template
+    value_template: >-
+      {{ trigger.payload_json is defined and
+         trigger.payload_json is mapping and
+         trigger.payload_json.action in ['approve', 'suppress'] and
+         trigger.topic is string and
+         trigger.topic.startswith('meters/casa/command/') and
+         trigger.topic.split('/') | length == 5 }}
+actions:
+  - variables:
+      parts: "{{ trigger.topic.split('/') }}"
+      meter_id: "{{ parts[3] }}"
+      period: "{{ parts[4] }}"
+      action: "{{ trigger.payload_json.action }}"
+      command_at: "{{ trigger.payload_json.get('at') if trigger.payload_json.at is defined else none }}"
+      command_index: "{{ trigger.payload_json.get('index') if trigger.payload_json.index is defined else none }}"
+      command_period: "{{ trigger.payload_json.get('period') if trigger.payload_json.period is defined else none }}"
+      period_valid: >-
+        {{ period is string and period.split('-') | length == 2 and
+           (period.split('-')[0] | int) >= 2000 and
+           (period.split('-')[1] | int) >= 1 and
+           (period.split('-')[1] | int) <= 12 }}
+      meters: "{{ (state_attr('sensor.meters_config', 'meters') or []) | select('mapping') | list }}"
+      meter_matches: "{{ meters | selectattr('id', 'equalto', meter_id) | list }}"
+      meter: "{{ meter_matches[0] if meter_matches else none }}"
+      house_id: "{{ meter.get('house_id') if meter is mapping else '' }}"
+      houses: "{{ (state_attr('sensor.meters_config', 'houses') or []) | select('mapping') | list }}"
+      house_matches: "{{ houses | selectattr('id', 'equalto', house_id) | list if house_id else [] }}"
+      house: "{{ house_matches[0] if house_matches else none }}"
+      house_name: "{{ (house.get('name') or house_id) if house else (house_id or 'Casa') }}"
+      ops_company: "{{ state_attr('sensor.meter_operations', 'company') or {} }}"
+      company_entry: "{{ ops_company.get(meter_id) if ops_company is mapping else none }}"
+      company: "{{ company_entry if company_entry is mapping else {} }}"
+      company_mode: "{{ company.get('mode', 'none') }}"
+      gate: "{{ is_state('input_boolean.publicare_companie', 'on') }}"
+      status_entity: "sensor.company_status_{{ meter_id | string | replace('-', '_') }}"
+      status_state: "{{ states(status_entity) }}"
+      status_period: "{{ state_attr(status_entity, 'period') }}"
+      status_index: "{{ state_attr(status_entity, 'index') }}"
+      status_previous_index: "{{ state_attr(status_entity, 'previous_index') }}"
+      status_delta: "{{ state_attr(status_entity, 'delta') }}"
+      status_proposed_at: "{{ state_attr(status_entity, 'proposed_at') }}"
+      status_range_state: "{{ state_attr(status_entity, 'range_state') }}"
+      status_topic: "meters/casa/status/{{ meter_id }}/{{ period }}"
+      number_entity: "{{ company.get('number_entity', '') }}"
+      submit_button: "{{ company.get('submit_button', '') }}"
+      citire_entity: "{{ company.get('citire_entity', '') }}"
+      index_entity: "{{ company.get('index_entity', '') }}"
+      smtp_service: "{{ company.get('smtp_service', '') }}"
+      contract_holder: "{{ company.get('contract_holder', '') }}"
+      contract_address: "{{ company.get('contract_address', '') }}"
+      cod_client: "{{ company.get('cod_client', '') }}"
+      center: "{{ company.get('center', '') }}"
+      command_fresh: >-
+        {%- if action == 'approve' -%}
+          {{- command_index is number and
+              command_at is string and
+              as_timestamp(command_at, 0) > as_timestamp(now()) - 600 and
+              as_timestamp(command_at, 0) < as_timestamp(now()) + 120 -}}
+        {%- else -%}
+          true
+        {%- endif -%}
+      period_match: >-
+        {{ status_period == period and
+           (command_period is none or command_period == period) }}
+      proposal_current: >-
+        {{ status_state == 'proposed' and (period_match | bool) and
+           status_index is number and command_index is number and
+           (status_index | float(-1)) == (command_index | float(-2)) and
+           (status_proposed_at is none or
+            (as_timestamp(status_proposed_at, 0) <= as_timestamp(command_at, 0) + 5 and
+             as_timestamp(status_proposed_at, 0) > as_timestamp(now()) - 35 * 86400)) }}
+      still_proposed: >-
+        {{ states(status_entity) == 'proposed' and
+           state_attr(status_entity, 'period') == period and
+           (state_attr(status_entity, 'index') | float(-1)) == (command_index | float(-2)) }}
+      window: "{{ meter.get('window') if meter is mapping else none }}"
+      window_configured: "{{ window is mapping }}"
+      window_ok: >-
+        {%- if not (window_configured | bool) or not (period_valid | bool) -%}
+          false
+        {%- else -%}
+          {%- set py = period.split('-')[0] | int -%}
+          {%- set pm = period.split('-')[1] | int -%}
+          {%- set month_start = now().replace(year=py, month=pm, day=1, hour=0, minute=0, second=0, microsecond=0) -%}
+          {%- set month_end = ((month_start + timedelta(days=32)).replace(day=1) - timedelta(days=1)).day -%}
+          {%- set od = window.get('open_day', 1) | int -%}
+          {%- set cd = window.get('close_day', 1) | int -%}
+          {%- set ot = ((window.get('open_time') or '00:00') | string).split(':') + ['0', '0'] -%}
+          {%- set ct = ((window.get('close_time') or '23:59') | string).split(':') + ['0', '0'] -%}
+          {%- set oh = [ot[0] | int, 23] | min -%}
+          {%- set oh = [oh, 0] | max -%}
+          {%- set om = [ot[1] | int, 59] | min -%}
+          {%- set om = [om, 0] | max -%}
+          {%- set ch = [ct[0] | int, 23] | min -%}
+          {%- set ch = [ch, 0] | max -%}
+          {%- set cm = [ct[1] | int, 59] | min -%}
+          {%- set cm = [cm, 0] | max -%}
+          {%- set open_day = [od, month_end] | min -%}
+          {%- set open_day = [open_day, 1] | max -%}
+          {%- set open_dt = month_start.replace(day=open_day, hour=oh, minute=om, second=0, microsecond=0) -%}
+          {%- set close_base = (month_start + timedelta(days=32)).replace(day=1) if cd < od else month_start -%}
+          {%- set close_month_end = ((close_base + timedelta(days=32)).replace(day=1) - timedelta(days=1)).day -%}
+          {%- set close_day = [cd, close_month_end] | min -%}
+          {%- set close_day = [close_day, 1] | max -%}
+          {%- set close_dt = close_base.replace(day=close_day, hour=ch, minute=cm, second=0, microsecond=0) -%}
+          {{- open_dt <= now() <= close_dt -}}
+        {%- endif -%}
+      email_mapping_ok: >-
+        {%- if company.get('smtp_service') and company.get('contract_holder') and
+               company.get('contract_address') and company.get('cod_client') -%}
+          true
+        {%- else -%}
+          false
+        {%- endif -%}
+      provider_mapping_ok: >-
+        {{ number_entity and submit_button and index_entity and
+           states(number_entity) != 'unavailable' and
+           states(submit_button) != 'unavailable' }}
+      citire_ok: >-
+        {{ citire_entity and
+           (states(citire_entity) | lower) in ['da', 'yes', 'true', 'on'] }}
+      same_entity: "{{ index_entity == number_entity }}"
+      pre_press_index: >-
+        {{ states(index_entity) if index_entity and number_entity and index_entity != number_entity else '' }}
+      range_state_ok: >-
+        {{ status_range_state in [none, ''] or
+           status_range_state in ['ok', 'unknown', 'warn'] }}
+      range_state_refused: "{{ status_range_state == 'refuse' }}"
+      range_state_bad: >-
+        {{ status_range_state not in [none, '', 'ok', 'unknown', 'warn', 'refuse'] }}
+      sending_payload: >-
+        {{ {'v': 1, 'meter_id': meter_id, 'period': period,
+            'state': 'sending', 'index': command_index,
+            'previous_index': status_previous_index, 'delta': status_delta,
+            'by': 'company_submitter', 'gate': 'on',
+            'updated_at': now().isoformat(),
+            'detail': 'send in progress'} | tojson }}
+      confirmed: false
+  - condition: template
+    value_template: "{{ period_valid | bool }}"
+  - choose:
+      - conditions: "{{ action == 'suppress' }}"
+        sequence:
+          - if:
+              - condition: template
+                value_template: >-
+                  {{ status_period == period and
+                     status_state in ['accepted', 'forwarded'] }}
+            then:
+              - action: script.notify_admin
+                continue_on_error: true
+                data:
+                  title: "Suprimare refuzată — {{ meter.get('name', meter_id) if meter is mapping else meter_id }}"
+                  message: >-
+                    {{ period }}: statusul este deja {{ status_state }};
+                    suprimarea nu poate ascunde o trimitere deja făcută.
+              - stop: "already sent; suppress ignored"
+          - action: mqtt.publish
+            data:
+              topic: "{{ status_topic }}"
+              qos: 1
+              retain: true
+              payload: >-
+                {{ {'v': 1, 'meter_id': meter_id, 'period': period,
+                    'state': 'suppressed',
+                    'index': command_index if command_index is number else status_index,
+                    'previous_index': status_previous_index, 'delta': status_delta,
+                    'by': 'company_submitter', 'gate': 'on' if (gate | bool) else 'off',
+                    'updated_at': now().isoformat(),
+                    'cancelled_at': now().isoformat(),
+                    'detail': 'suppressed by the company submitter; durable'} | tojson }}
+          # Let the retained status reach the discovery entity before a queued
+          # approve reads it. Without this, an approve queued immediately after
+          # suppress could still observe the old `proposed` state.
+          - delay: "00:00:02"
+          - action: script.notify_admin
+            continue_on_error: true
+            data:
+              title: "Propunere suprimată — {{ meter.get('name', meter_id) if meter is mapping else meter_id }}"
+              message: >-
+                {{ period }}: indexul
+                {{ command_index if command_index is number else status_index }}
+                nu a fost trimis către companie. Suprimarea este durabilă;
+                o aprobare ulterioară pentru aceeași perioadă este refuzată.
+          - stop: "suppressed"
+      - conditions: "{{ action == 'approve' }}"
+        sequence:
+          - if:
+              - condition: template
+                value_template: "{{ meter is not mapping or company_mode not in ['approve', 'email'] }}"
+            then:
+              - action: script.notify_admin
+                continue_on_error: true
+                data:
+                  title: "Trimitere blocată — mod companie"
+                  message: >-
+                    {{ meter.get('name', meter_id) if meter is mapping else meter_id }}:
+                    company.mode este '{{ company_mode }}'; nu se trimite automat.
+              - stop: "company mode is not approve/email"
+          - if:
+              - condition: template
+                value_template: "{{ not (proposal_current | bool) }}"
+            then:
+              - action: script.notify_admin
+                continue_on_error: true
+                data:
+                  title: "Aprobare ignorată — propunere expirată"
+                  message: >-
+                    {{ meter.get('name', meter_id) if meter is mapping else meter_id }} ·
+                    {{ period }}: statusul actual este {{ status_state }};
+                    indexul aprobat nu mai corespunde propunerii. Nu s-a trimis nimic.
+              - stop: "proposal is not current"
+          - if:
+              - condition: template
+                value_template: "{{ not (command_fresh | bool) }}"
+            then:
+              - action: script.notify_admin
+                continue_on_error: true
+                data:
+                  title: "Aprobare ignorată — comandă expirată"
+                  message: >-
+                    {{ meter.get('name', meter_id) if meter is mapping else meter_id }} ·
+                    {{ period }}: comanda este mai veche de 10 minute, are un
+                    index nenumeric sau nu are un timestamp `at` valid.
+              - stop: "stale or malformed approve command"
+          - if:
+              - condition: template
+                value_template: "{{ not (gate | bool) }}"
+            then:
+              - action: mqtt.publish
+                data:
+                  topic: "{{ status_topic }}"
+                  qos: 1
+                  retain: true
+                  payload: >-
+                    {{ {'v': 1, 'meter_id': meter_id, 'period': period,
+                        'state': 'blocked', 'index': command_index,
+                        'previous_index': status_previous_index, 'delta': status_delta,
+                        'by': 'ha', 'gate': 'off', 'updated_at': now().isoformat(),
+                        'detail': 'global publishing switch is suppressed'} | tojson }}
+              - action: script.notify_admin
+                continue_on_error: true
+                data:
+                  title: "Trimitere blocată — comutator global"
+                  message: >-
+                    {{ meter.get('name', meter_id) if meter is mapping else meter_id }} ·
+                    {{ period }}: comutatorul global de publicare este SUPRIMAT.
+              - stop: "global company publishing is suppressed"
+          - if:
+              - condition: template
+                value_template: "{{ company_mode == 'email' }}"
+            then:
+              - if:
+                  - condition: template
+                    value_template: "{{ not (email_mapping_ok | bool) }}"
+                then:
+                  - action: mqtt.publish
+                    data:
+                      topic: "{{ status_topic }}"
+                      qos: 1
+                      retain: true
+                      payload: >-
+                        {{ {'v': 1, 'meter_id': meter_id, 'period': period,
+                            'state': 'error', 'index': command_index,
+                            'previous_index': status_previous_index, 'delta': status_delta,
+                            'by': 'ha', 'gate': 'on', 'updated_at': now().isoformat(),
+                            'detail': 'email delivery mapping is incomplete'} | tojson }}
+                  - action: script.notify_admin
+                    continue_on_error: true
+                    data:
+                      title: "Email blocat — mapare incompletă"
+                      message: >-
+                        {{ meter.get('name', meter_id) if meter is mapping else meter_id }}:
+                        lipsesc serviciul SMTP, titularul, adresa sau codul client.
+                  - stop: "email mapping incomplete"
+              - if:
+                  - condition: template
+                    value_template: "{{ not (window_configured | bool) }}"
+                then:
+                  - action: mqtt.publish
+                    data:
+                      topic: "{{ status_topic }}"
+                      qos: 1
+                      retain: true
+                      payload: >-
+                        {{ {'v': 1, 'meter_id': meter_id, 'period': period,
+                            'state': 'blocked', 'index': command_index,
+                            'previous_index': status_previous_index, 'delta': status_delta,
+                            'by': 'ha', 'gate': 'on', 'updated_at': now().isoformat(),
+                            'detail': 'no email reporting window configured'} | tojson }}
+                  - action: script.notify_admin
+                    continue_on_error: true
+                    data:
+                      title: "Email blocat — fereastră nedefinită"
+                      message: >-
+                        {{ meter.get('name', meter_id) if meter is mapping else meter_id }} ·
+                        {{ period }}: contorul nu are o fereastră de raportare;
+                        trimiterea prin email este refuzată.
+                  - stop: "email window is not configured"
+              - if:
+                  - condition: template
+                    value_template: "{{ not (window_ok | bool) }}"
+                then:
+                  - action: mqtt.publish
+                    data:
+                      topic: "{{ status_topic }}"
+                      qos: 1
+                      retain: true
+                      payload: >-
+                        {{ {'v': 1, 'meter_id': meter_id, 'period': period,
+                            'state': 'blocked', 'index': command_index,
+                            'previous_index': status_previous_index, 'delta': status_delta,
+                            'by': 'ha', 'gate': 'on', 'updated_at': now().isoformat(),
+                            'detail': 'outside the email reporting window'} | tojson }}
+                  - action: script.notify_admin
+                    continue_on_error: true
+                    data:
+                      title: "Email blocat — fereastra CATD"
+                      message: >-
+                        {{ meter.get('name', meter_id) if meter is mapping else meter_id }} ·
+                        {{ period }}: fereastra de email nu este deschisă acum
+                        (verificare completă dată + oră + perioadă).
+                  - stop: "outside email reporting window"
+              - if:
+                  - condition: template
+                    value_template: "{{ range_state_refused | bool }}"
+                then:
+                  - action: mqtt.publish
+                    data:
+                      topic: "{{ status_topic }}"
+                      qos: 1
+                      retain: true
+                      payload: >-
+                        {{ {'v': 1, 'meter_id': meter_id, 'period': period,
+                            'state': 'blocked', 'index': command_index,
+                            'previous_index': status_previous_index, 'delta': status_delta,
+                            'range_state': status_range_state,
+                            'by': 'ha', 'gate': 'on', 'updated_at': now().isoformat(),
+                            'detail': 'refused index: range_state=refuse'} | tojson }}
+                  - action: script.notify_admin
+                    continue_on_error: true
+                    data:
+                      title: "Email blocat — index refuzat"
+                      message: >-
+                        {{ meter.get('name', meter_id) if meter is mapping else meter_id }} ·
+                        {{ period }}: propunerea are range_state=refuse și nu
+                        poate fi trimisă.
+                  - stop: "range_state=refuse"
+              - if:
+                  - condition: template
+                    value_template: "{{ range_state_bad | bool }}"
+                then:
+                  - action: mqtt.publish
+                    data:
+                      topic: "{{ status_topic }}"
+                      qos: 1
+                      retain: true
+                      payload: >-
+                        {{ {'v': 1, 'meter_id': meter_id, 'period': period,
+                            'state': 'error', 'index': command_index,
+                            'previous_index': status_previous_index, 'delta': status_delta,
+                            'range_state': status_range_state,
+                            'by': 'ha', 'gate': 'on', 'updated_at': now().isoformat(),
+                            'detail': 'unknown range_state in proposal'} | tojson }}
+                  - action: script.notify_admin
+                    continue_on_error: true
+                    data:
+                      title: "Email blocat — stare necunoscută"
+                      message: >-
+                        {{ meter.get('name', meter_id) if meter is mapping else meter_id }} ·
+                        {{ period }}: range_state={{ status_range_state }} nu este
+                        acceptat. Sunt permise doar ok, unknown și warn (cu
+                        aprobare explicită).
+                  - stop: "unknown range_state"
+              - if:
+                  - condition: template
+                    value_template: "{{ not (still_proposed | bool) }}"
+                then:
+                  - action: script.notify_admin
+                    continue_on_error: true
+                    data:
+                      title: "Email anulat — propunere schimbată"
+                      message: >-
+                        {{ meter.get('name', meter_id) if meter is mapping else meter_id }} ·
+                        {{ period }}: propunerea nu mai este `proposed` sau
+                        indexul s-a schimbat; nu s-a trimis niciun email.
+                  - stop: "proposal changed before send"
+              - action: mqtt.publish
+                data:
+                  topic: "{{ status_topic }}"
+                  qos: 1
+                  retain: true
+                  payload: "{{ sending_payload }}"
+              - action: script.company_send_email
+                continue_on_error: true
+                data:
+                  status_topic: "{{ status_topic }}"
+                  meter_id: "{{ meter_id }}"
+                  meter_name: "{{ meter.get('name', meter_id) if meter is mapping else meter_id }}"
+                  period: "{{ period }}"
+                  index: "{{ command_index }}"
+                  previous_index: "{{ status_previous_index if status_previous_index is not none else '' }}"
+                  delta: "{{ status_delta if status_delta is not none else '' }}"
+                  unit: "{{ meter.get('unit', '') if meter is mapping else '' }}"
+                  smtp_service: "{{ smtp_service }}"
+                  contract_holder: "{{ contract_holder }}"
+                  contract_address: "{{ contract_address }}"
+                  cod_client: "{{ cod_client }}"
+                  center: "{{ center }}"
+              - wait_template: "{{ is_state(status_entity, 'forwarded') }}"
+                timeout: "00:00:30"
+                continue_on_timeout: true
+              - if:
+                  - condition: template
+                    value_template: "{{ not wait.completed }}"
+                then:
+                  - action: mqtt.publish
+                    data:
+                      topic: "{{ status_topic }}"
+                      qos: 1
+                      retain: true
+                      payload: >-
+                        {{ {'v': 1, 'meter_id': meter_id, 'period': period,
+                            'state': 'error', 'index': command_index,
+                            'previous_index': status_previous_index, 'delta': status_delta,
+                            'by': 'ha', 'gate': 'on', 'uncertain': true,
+                            'updated_at': now().isoformat(),
+                            'detail': 'SMTP send failed or was not confirmed; verify the mailbox before retrying'} | tojson }}
+                  - action: script.notify_admin
+                    continue_on_error: true
+                    data:
+                      title: "Email eșuat — {{ meter.get('name', meter_id) if meter is mapping else meter_id }}"
+                      message: >-
+                        {{ period }}: trimiterea SMTP nu a putut fi confirmată.
+                        Verifică mailbox-ul CATD înainte de a reîncerca; statusul
+                        rămâne `error` cu uncertain=true.
+                  - stop: "SMTP failed or was not confirmed"
+              - stop: "email sent"
+          - if:
+              - condition: template
+                value_template: "{{ not (citire_ok | bool) }}"
+            then:
+              - action: mqtt.publish
+                data:
+                  topic: "{{ status_topic }}"
+                  qos: 1
+                  retain: true
+                  payload: >-
+                    {{ {'v': 1, 'meter_id': meter_id, 'period': period,
+                        'state': 'blocked', 'index': command_index,
+                        'previous_index': status_previous_index, 'delta': status_delta,
+                        'by': 'ha', 'gate': 'on', 'updated_at': now().isoformat(),
+                        'detail': 'company reading window is closed'} | tojson }}
+              - action: script.notify_admin
+                continue_on_error: true
+                data:
+                  title: "Trimitere blocată — fereastra companiei"
+                  message: >-
+                    {{ meter.get('name', meter_id) if meter is mapping else meter_id }} ·
+                    {{ period }}: fereastra de citire a companiei nu este deschisă.
+              - stop: "company reading window is closed"
+          - if:
+              - condition: template
+                value_template: "{{ not (provider_mapping_ok | bool) }}"
+            then:
+              - action: mqtt.publish
+                data:
+                  topic: "{{ status_topic }}"
+                  qos: 1
+                  retain: true
+                  payload: >-
+                    {{ {'v': 1, 'meter_id': meter_id, 'period': period,
+                        'state': 'error', 'index': command_index,
+                        'previous_index': status_previous_index, 'delta': status_delta,
+                        'by': 'ha', 'gate': 'on', 'updated_at': now().isoformat(),
+                        'detail': 'provider entity mapping is incomplete or unavailable'} | tojson }}
+              - action: script.notify_admin
+                continue_on_error: true
+                data:
+                  title: "Trimitere eșuată — mapare incompletă"
+                  message: >-
+                    {{ meter.get('name', meter_id) if meter is mapping else meter_id }}:
+                    lipsesc entitățile number/button/index sau sunt unavailable.
+              - stop: "provider mapping incomplete"
+          - if:
+              - condition: template
+                value_template: "{{ not (still_proposed | bool) }}"
+            then:
+              - action: script.notify_admin
+                continue_on_error: true
+                data:
+                  title: "Trimitere anulată — propunere schimbată"
+                  message: >-
+                    {{ meter.get('name', meter_id) if meter is mapping else meter_id }} ·
+                    {{ period }}: propunerea nu mai este `proposed` sau indexul
+                    s-a schimbat; nu s-a apăsat butonul.
+              - stop: "proposal changed before provider submit"
+          - action: mqtt.publish
+            data:
+              topic: "{{ status_topic }}"
+              qos: 1
+              retain: true
+              payload: "{{ sending_payload }}"
+          - action: number.set_value
+            target:
+              entity_id: "{{ number_entity }}"
+            data:
+              value: "{{ command_index }}"
+          - delay: "00:00:02"
+          - action: button.press
+            target:
+              entity_id: "{{ submit_button }}"
+          - if:
+              - condition: template
+                value_template: "{{ not (same_entity | bool) }}"
+            then:
+              - wait_template: >-
+                  {{ states(index_entity) | float(-1) == command_index | float(-2) }}
+                timeout: "00:00:45"
+                continue_on_timeout: true
+              - variables:
+                  confirmed: >-
+                    {{ wait.completed and
+                       (pre_press_index | float(-1)) != (command_index | float(-2)) }}
+            else:
+              - delay: "00:00:10"
+          - action: mqtt.publish
+            data:
+              topic: "{{ status_topic }}"
+              qos: 1
+              retain: true
+              payload: >-
+                {{ {'v': 1, 'meter_id': meter_id, 'period': period,
+                    'state': 'accepted' if (confirmed | bool) else 'forwarded',
+                    'index': command_index,
+                    'previous_index': status_previous_index, 'delta': status_delta,
+                    'by': 'company_submitter', 'gate': 'on',
+                    'updated_at': now().isoformat(),
+                    'detail': ('company index confirmed' if (confirmed | bool) else
+                               ('button pressed; index entity is the same as the number entity; verify the company index' if (same_entity | bool) else
+                                'button pressed; verify the company index'))} | tojson }}
+          - action: script.notify_admin
+            continue_on_error: true
+            data:
+              title: >-
+                {{ 'Index confirmat' if (confirmed | bool) else 'Index trimis — verifică' }} —
+                {{ meter.get('name', meter_id) if meter is mapping else meter_id }}
+              message: >-
+                {{ period }}: index {{ command_index }}
+                {{ meter.get('unit', '') if meter is mapping else '' }}.
+                {{ 'Compania a confirmat indexul.' if (confirmed | bool) else
+                   ('Butonul a fost apăsat; index_entity este aceeași entitate ca number_entity, deci confirmarea nu este posibilă — verifică indexul companiei.' if (same_entity | bool) else
+                    'Butonul a fost apăsat; verifică indexul companiei.') }}
+          - stop: "provider submit done"

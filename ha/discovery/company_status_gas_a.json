@@ -1,0 +1,9 @@
+{
+  "name": "Company status gas-a",
+  "object_id": "company_status_gas_a",
+  "unique_id": "meters_company_status_demo_gas_a",
+  "state_topic": "meters/casa/status/gas-a/+",
+  "value_template": "{{ value_json.state }}",
+  "json_attributes_topic": "meters/casa/status/gas-a/+",
+  "icon": "mdi:send-check"
+}

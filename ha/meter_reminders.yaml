@@ -1,0 +1,131 @@
+alias: "Meters — daily reminder"
+description: >-
+  One reminder per meter while its reporting window is open and the meter has no
+  submission for the period. Roles and delivery targets come from the private
+  sensor.meter_operations (MQTT schema 3): index_submitter (legacy mother or
+  reporter) routes to ntfy, company_submitter (legacy admin) routes to
+  script.notify_admin (Pushover to the admin). reading_mode: external meters
+  are skipped because they are reported outside the index-submitter form. An unavailable or missing
+  submission sensor is treated as unknown, not as unreported, so a broken
+  entity cannot produce a false reminder. One malformed meter is skipped
+  without aborting the rest of the loop.
+mode: single
+triggers:
+  - trigger: time
+    at: "10:00:00"
+actions:
+  - variables:
+      meters: "{{ (state_attr('sensor.meters_config', 'meters') or []) | select('mapping') | list }}"
+      houses: "{{ (state_attr('sensor.meters_config', 'houses') or []) | select('mapping') | list }}"
+      routes: "{{ state_attr('sensor.meter_operations', 'routes') or {} }}"
+  - repeat:
+      for_each: "{{ meters }}"
+      sequence:
+        - variables:
+            meter: "{{ repeat.item }}"
+            due: >-
+              {% set meter_id = meter.get('id') %}
+              {% set w = meter.get('window') %}
+              {% set external = meter.get('reading_mode', 'manual') == 'external' or meter.get('reporting', 'manual') in ['smart', 'sensor'] %}
+              {% if meter_id is not string or not meter_id or external or w is not mapping %}
+                {{ {'due': false, 'reason': 'external or no reporting window'} | tojson }}
+              {% else %}
+                {% set n = now() %}
+                {% set od = w.get('open_day', 1) | int %}
+                {% set cd = w.get('close_day', 1) | int %}
+                {% set ot = ((w.get('open_time') or '00:00') | string).split(':') + ['0', '0'] %}
+                {% set ct = ((w.get('close_time') or '23:59') | string).split(':') + ['0', '0'] %}
+                {% set oh = [ot[0] | int, 23] | min %}
+                {% set oh = [oh, 0] | max %}
+                {% set om = [ot[1] | int, 59] | min %}
+                {% set om = [om, 0] | max %}
+                {% set ch = [ct[0] | int, 23] | min %}
+                {% set ch = [ch, 0] | max %}
+                {% set cm = [ct[1] | int, 59] | min %}
+                {% set cm = [cm, 0] | max %}
+                {% set this_month_end = ((n.replace(day=1) + timedelta(days=32)).replace(day=1) - timedelta(days=1)).day %}
+                {% set open_day_this = [od, this_month_end] | min %}
+                {% set open_day_this = [open_day_this, 1] | max %}
+                {% set open_this = n.replace(day=open_day_this, hour=oh, minute=om, second=0, microsecond=0) %}
+                {% set close_base = (n.replace(day=1) + timedelta(days=32)).replace(day=1) if cd < od else n %}
+                {% set close_month_end = ((close_base.replace(day=1) + timedelta(days=32)).replace(day=1) - timedelta(days=1)).day %}
+                {% set close_day_this = [cd, close_month_end] | min %}
+                {% set close_day_this = [close_day_this, 1] | max %}
+                {% set close_this = close_base.replace(day=close_day_this, hour=ch, minute=cm, second=0, microsecond=0) %}
+                {% set prev = n.replace(day=1) - timedelta(days=1) %}
+                {% set open_day_prev = [od, prev.day] | min %}
+                {% set open_day_prev = [open_day_prev, 1] | max %}
+                {% set open_prev = prev.replace(day=open_day_prev, hour=oh, minute=om, second=0, microsecond=0) %}
+                {% set close_prev_base = (prev.replace(day=1) + timedelta(days=32)).replace(day=1) if cd < od else prev %}
+                {% set close_prev_month_end = ((close_prev_base.replace(day=1) + timedelta(days=32)).replace(day=1) - timedelta(days=1)).day %}
+                {% set close_day_prev = [cd, close_prev_month_end] | min %}
+                {% set close_day_prev = [close_day_prev, 1] | max %}
+                {% set close_prev = close_prev_base.replace(day=close_day_prev, hour=ch, minute=cm, second=0, microsecond=0) %}
+                {% if open_prev <= n <= close_prev %}
+                  {% set period = prev.strftime('%Y-%m') %}
+                  {% set in_window = true %}
+                  {% set chosen_close = close_prev %}
+                {% elif open_this <= n <= close_this %}
+                  {% set period = n.strftime('%Y-%m') %}
+                  {% set in_window = true %}
+                  {% set chosen_close = close_this %}
+                {% else %}
+                  {% set period = n.strftime('%Y-%m') %}
+                  {% set in_window = false %}
+                  {% set chosen_close = close_this %}
+                {% endif %}
+                {% set sensor = 'sensor.submission_' ~ (meter_id | string | replace('-', '_')) %}
+                {% set last = states(sensor) %}
+                {% set known = last not in ['unknown', 'unavailable', 'none', 'None', ''] %}
+                {% set house_id = meter.get('house_id') or '' %}
+                {% set house_matches = houses | selectattr('id', 'equalto', house_id) | list if house_id else [] %}
+                {% set house = house_matches[0] if house_matches else none %}
+                {% set house_name = (house.get('name') or house_id) if house else (house_id or 'Casa') %}
+                {% set route = routes.get(meter_id) if routes is mapping else none %}
+                {% set target = (route.get('target') if route is mapping else none) or 'company_submitter' %}
+                {% if target in ['index_submitter', 'mother', 'reporter'] %}
+                  {% set target = 'index_submitter' %}
+                {% else %}
+                  {% set target = 'company_submitter' %}
+                {% endif %}
+                {% set luni = ['ianuarie', 'februarie', 'martie', 'aprilie', 'mai', 'iunie', 'iulie', 'august', 'septembrie', 'octombrie', 'noiembrie', 'decembrie'] %}
+                {% set period_label = luni[(period.split('-')[1] | int) - 1] ~ ' ' ~ period.split('-')[0] %}
+                {{ {
+                  'due': in_window and known and last != period,
+                  'unknown': in_window and not known,
+                  'name': meter.get('name') or meter_id,
+                  'house_name': house_name,
+                  'period': period,
+                  'period_label': period_label,
+                  'close_label': chosen_close.strftime('%d.%m.%Y %H:%M'),
+                  'sensor': sensor,
+                  'last': last,
+                  'target': target
+                } | tojson }}
+              {% endif %}
+        - variables:
+            d: "{{ due | from_json }}"
+        - if:
+            - condition: template
+              value_template: "{{ d.due }}"
+          then:
+            - choose:
+                - conditions: "{{ d.target == 'index_submitter' }}"
+                  sequence:
+                    - action: script.notify_index_submitter
+                      continue_on_error: true
+                      data:
+                        url: "https://YOUR_GITHUB_USER.github.io/report-consumption/"
+                        action_label: "Open index reporting page"
+              default:
+                - action: script.notify_admin
+                  continue_on_error: true
+                  data:
+                    title: "Raportare index — {{ d.house_name }}"
+                    message: >-
+                      {{ d.name }}: fereastra este deschisă până la
+                      {{ d.close_label }}. Nu ai trimis încă indexul pentru
+                      {{ d.period_label }}.
+                    data:
+                      url: "https://YOUR_GITHUB_USER.github.io/report-consumption/admin.html"
+                      url_title: "Open administration"

@@ -1,0 +1,45 @@
+# Index-submitter notification: ntfy only, generic, no PII.
+#
+# The index submitter (mother) receives this on the ntfy app. The message contains
+# no house/meter name, index, period, address, token or installation id.
+# The link is a bare reporter page URL; the access token is obtained separately
+# from the invite link and stored in localStorage.
+#
+# From configuration.yaml:
+#
+#   script:
+#     notify_index_submitter: !include ha/notify_index_submitter.yaml
+alias: "Notify index submitter"
+description: "Send a generic reporting reminder to the index submitter through ntfy."
+fields:
+  url:
+    name: Bare reporter URL
+    description: Reporter page URL with no query or fragment.
+    default: "https://YOUR_GITHUB_USER.github.io/report-consumption/"
+    selector:
+      text:
+  action_label:
+    name: Action label
+    default: "Open index reporting page"
+    selector:
+      text:
+
+sequence:
+  - if:
+      - condition: template
+        value_template: >-
+          {{ url is defined and url != '' and (('?' in url) or ('#' in url)) }}
+    then:
+      - stop: "refusing notification URL with query/fragment identifier"
+
+  - action: script.ntfy_notify
+    data:
+      title: "Report consumption"
+      message: "A reporting window is open. Open the index reporting page."
+      priority: "default"
+      tags: "bell"
+      url: "{{ url }}"
+      action_label: "{{ action_label | default('Open index reporting page') }}"
+
+mode: parallel
+max: 20

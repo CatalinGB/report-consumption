@@ -1,0 +1,55 @@
+alias: "Meters — new index notification"
+description: >-
+  Consumes the index submitter's non-retained meters/<installation>/event/index
+  event and notifies the company submitter that a new index is ready for review.
+  This is the user -> admin notification for a new index; company_preflight only
+  writes the retained proposal and does not notify. Legacy submitted_by=reporter
+  is accepted during migration.
+mode: queued
+max: 20
+triggers:
+  - trigger: mqtt
+    topic: meters/casa/event/index
+    qos: 1
+conditions:
+  - condition: template
+    value_template: >-
+      {{ trigger.payload_json is defined and
+         trigger.payload_json is mapping and
+         trigger.payload_json.meter_id is string and
+         trigger.payload_json.period is defined and
+         trigger.payload_json.period is string and
+         trigger.payload_json.index is defined and
+         trigger.payload_json.index is number and
+         (trigger.payload_json.submitted_by | default('')) in ['index_submitter', 'reporter'] }}
+actions:
+  - variables:
+      event: "{{ trigger.payload_json }}"
+      meter_id: "{{ event.meter_id }}"
+      period: "{{ event.period }}"
+      index: "{{ event.index }}"
+      submitted_by: "{{ event.submitted_by | default('index_submitter') }}"
+      role_label: >-
+        {{ 'Company submitter' if submitted_by == 'company_submitter'
+           else 'Index submitter' }}
+      meters: "{{ (state_attr('sensor.meters_config', 'meters') or []) | select('mapping') | list }}"
+      houses: "{{ (state_attr('sensor.meters_config', 'houses') or []) | select('mapping') | list }}"
+      meter_matches: "{{ meters | selectattr('id', 'equalto', meter_id) | list }}"
+      meter: "{{ meter_matches[0] if meter_matches else none }}"
+      house_id: "{{ meter.get('house_id') if meter is mapping else '' }}"
+      house_matches: "{{ houses | selectattr('id', 'equalto', house_id) | list if house_id else [] }}"
+      house: "{{ house_matches[0] if house_matches else none }}"
+      house_name: "{{ (house.get('name') or house_id) if house else (house_id or 'Casa') }}"
+      meter_name: "{{ meter.get('name', meter_id) if meter is mapping else meter_id }}"
+      unit: "{{ meter.get('unit', '') if meter is mapping else '' }}"
+  - action: script.notify_admin
+    data:
+      title: "Index nou — {{ house_name }}"
+      message: >-
+        {{ meter_name }} · {{ house_name }}: index nou {{ index }} {{ unit }}
+        pentru perioada {{ period }}. Trimis de {{ role_label }}.
+        Deschide administrarea pentru a verifica propunerea și a aproba sau
+        suprima trimiterea către companie.
+      data:
+        url: "https://YOUR_GITHUB_USER.github.io/report-consumption/admin.html"
+        url_title: "Open administration"

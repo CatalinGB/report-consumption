@@ -1,0 +1,73 @@
+# Admin notification: Pushover to kalioPhone only.
+#
+# The admin is the company submitter and may receive operational detail on
+# Pushover: house/meter label, index, period and status. A physical/contract
+# address must never be put in this message.
+#
+# The index submitter does not use this script; use notify_index_submitter.yaml
+# (ntfy, generic, no PII).
+#
+# From configuration.yaml:
+#
+#   script:
+#     notify_admin: !include ha/notify_admin.yaml
+#
+# The URL must be a bare page URL: no query string, no fragment, no token or
+# installation id.
+alias: "Notify admin"
+description: "Send detailed admin operational alerts to Pushover (kalioPhone); never send an address."
+fields:
+  target:
+    name: Pushover target
+    description: Admin Pushover device.
+    default: "kalioPhone"
+    selector:
+      text:
+  title:
+    name: Title
+    required: true
+    selector:
+      text:
+  message:
+    name: Message
+    required: true
+    selector:
+      text:
+        multiline: true
+  data:
+    name: Pushover data
+    description: Optional URL/title/priority/sound object.
+    default: {}
+    selector:
+      object:
+  admin_url:
+    name: Bare admin URL
+    description: Fallback bare admin page URL.
+    default: "https://YOUR_GITHUB_USER.github.io/report-consumption/admin.html"
+    selector:
+      text:
+
+sequence:
+  - if:
+      - condition: template
+        value_template: >-
+          {{ (data is mapping and data.url is defined and data.url != '' and
+              (('?' in data.url) or ('#' in data.url))) or
+             (admin_url is defined and admin_url != '' and
+              (('?' in admin_url) or ('#' in admin_url))) }}
+    then:
+      - stop: "refusing notification URL with query/fragment identifier"
+
+  - action: notify.pushover
+    data:
+      target: "{{ target | default('kalioPhone') }}"
+      title: "{{ title }}"
+      message: "{{ message }}"
+      data: >-
+        {% set d = dict(data) if data is mapping else {} %}
+        {% set _ = d.update({'url': (d.get('url', '') or admin_url),
+                             'url_title': (d.get('url_title', '') or 'Open administration')}) %}
+        {{ d }}
+
+mode: parallel
+max: 20

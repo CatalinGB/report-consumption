@@ -1,0 +1,30 @@
+# Flespi -> home Mosquitto bridge for Report Consumption.
+# Copy this file into the Mosquitto extensions directory. On the Unraid setup:
+#   /path/to/mosquitto/config/extensions/flespi-bridge.conf
+# Inside the container it is:
+#   /mosquitto/config/extensions/flespi-bridge.conf
+# Make it readable by the container user (chmod 644) and restart `mosquitto`.
+#
+# `remote_username` is the report-consumption-home ACL token (no password).
+# The token is a secret; keep this file private.
+connection flespi-report
+address mqtt.flespi.io:8883
+remote_username <HOME_TOKEN>
+remote_clientid report-consumption-home-v2
+bridge_protocol_version mqttv311
+bridge_cafile /etc/ssl/certs/ca-certificates.crt
+bridge_tls_version tlsv1.2
+try_private false
+# No LWT: scoped tokens are rejected when CONNECT carries a Will. Mosquitto's
+# default notification will topic is $SYS/broker/connection/... and is outside
+# this token's meters/casa/# ACL.
+notifications false
+cleansession false
+start_type automatic
+restart_timeout 10 180
+
+# Flespi -> home: config, submissions, last pointers, photos, status.
+topic meters/casa/# in 1
+
+# Home -> Flespi: the HA forwarding status (if/when that automation is added).
+topic meters/casa/status/# out 1

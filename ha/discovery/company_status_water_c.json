@@ -1,0 +1,9 @@
+{
+  "name": "Company status water-c",
+  "object_id": "company_status_water_c",
+  "unique_id": "meters_company_status_demo_water_c",
+  "state_topic": "meters/casa/status/water-c/+",
+  "value_template": "{{ value_json.state }}",
+  "json_attributes_topic": "meters/casa/status/water-c/+",
+  "icon": "mdi:send-check"
+}

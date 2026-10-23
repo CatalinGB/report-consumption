@@ -1,0 +1,9 @@
+{
+  "name": "Submission water-a",
+  "object_id": "submission_water_a",
+  "unique_id": "meters_submission_demo_water_a",
+  "state_topic": "meters/casa/last/water-a",
+  "value_template": "{{ value_json.period }}",
+  "json_attributes_topic": "meters/casa/last/water-a",
+  "icon": "mdi:calendar-check"
+}

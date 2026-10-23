@@ -1,0 +1,22 @@
+{
+  "name": "report-consumption",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Static MQTT meter-reporting page",
+  "scripts": {
+    "test": "node tests/anomaly.test.js && node tests/period.test.js && node tests/schema.test.js",
+    "e2e": "node tests/e2e-browser.js",
+    "e2e:multi": "node tests/e2e-multihouse.js",
+    "backup": "node tools/export-mqtt.js",
+    "healthcheck": "node tools/healthcheck-bridge.js",
+    "ntfy:send": "node tools/ntfy-notify.js",
+    "ntfy:listen": "node tools/ntfy-listener.js"
+  },
+  "devDependencies": {
+    "mqtt": "^5.16.1",
+    "playwright": "^1.64.1"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

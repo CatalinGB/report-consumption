@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="ro">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; connect-src 'self' wss://mqtt.flespi.io wss://mqtt.flespi.io:443 ws://localhost:8084 wss://localhost:8084 ws://localhost:8083; manifest-src 'self'; worker-src 'self' blob:; base-uri 'none'; object-src 'none'">
+  <title>Administrare — Raport Index</title>
+  <meta name="theme-color" content="#0f1115">
+  <link rel="icon" href="icon-192.png">
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">Company submitter <span class="muted">· Administrare</span></div>
+    <div class="top-actions">
+      <span id="conn" class="pill pill--off">Deconectat</span>
+      <a class="ghost" href="index.html">Raportare</a>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <div id="toast" class="toast" hidden role="status"></div>
+
+    <section id="setup" class="card" hidden>
+      <h1>Conectare company submitter</h1>
+      <p class="muted">Tokenul de administrare rămâne doar în această sesiune.</p>
+      <form id="setup-form" class="form">
+        <label>
+          <span>Instalație</span>
+          <input id="installation" name="installation" autocomplete="off" spellcheck="false" required>
+        </label>
+        <label>
+          <span>Token administrare</span>
+          <input id="token" name="token" type="password" autocomplete="off" spellcheck="false" required>
+        </label>
+        <details class="advanced">
+          <summary>Avansat</summary>
+          <label>
+            <span>Broker</span>
+            <input id="broker" name="broker" autocomplete="off" spellcheck="false">
+          </label>
+        </details>
+        <button class="primary" type="submit">Conectează</button>
+      </form>
+    </section>
+
+    <section id="admin" hidden>
+      <nav class="tabs" role="tablist" aria-label="Administrare">
+        <button id="tab-btn-reporting" class="tab" type="button" role="tab" data-tab="reporting" aria-selected="true" aria-controls="tab-reporting">Raportare</button>
+        <button id="tab-btn-company" class="tab" type="button" role="tab" data-tab="company" aria-selected="false" aria-controls="tab-company">Companie <span class="tab-badge" data-tab-badge="company" hidden></span></button>
+        <button id="tab-btn-configuration" class="tab" type="button" role="tab" data-tab="configuration" aria-selected="false" aria-controls="tab-configuration">Configurare</button>
+        <button id="tab-btn-access" class="tab" type="button" role="tab" data-tab="access" aria-selected="false" aria-controls="tab-access">Acces</button>
+      </nav>
+
+      <p id="save-status" class="notice" role="status" aria-live="polite"></p>
+
+      <div id="tab-reporting" class="tab-panel" data-tab-panel="reporting" role="tabpanel" aria-labelledby="tab-btn-reporting">
+        <div class="card">
+          <div class="row row--between">
+            <div>
+              <h1>Raportare manuală</h1>
+              <p class="muted">Publică indexul în MQTT ca <span class="mono">company_submitter</span>. Home Assistant preia <span class="mono">last/&lt;contor&gt;</span>, rulează aceeași verificare de companie ca pentru raportor și, dacă modul companie este activ, propune indexul în tabul <strong>Companie</strong>. Aprobarea și suprimarea rămân în HA.</p>
+            </div>
+            <select id="citiri-house" aria-label="Filtru casă raportare"></select>
+          </div>
+          <div id="citiri" class="meters"></div>
+        </div>
+
+        <div class="card">
+          <div class="row row--between">
+            <div>
+              <h1>Istoric raportări</h1>
+              <p class="muted">Citit din topicurile retained <span class="mono">meters/&lt;instalație&gt;/submission/#</span>.</p>
+            </div>
+            <div class="row">
+              <select id="history-house" aria-label="Filtru casă"><option value="">Toate casele</option></select>
+              <button id="refresh-history" class="ghost" type="button">Reîncarcă</button>
+            </div>
+          </div>
+          <div id="history" class="history-table"></div>
+        </div>
+
+        <div class="card">
+          <h1>Reset raportare</h1>
+          <p class="muted">Șterge submission, status și foto pentru un contor și marchează <span class="mono">last</span> ca resetat, astfel încât HA să reia reminders, preflight și propuneri. Nu anulează o trimitere deja făcută către companie.</p>
+          <div class="row">
+            <select id="reset-meter" aria-label="Contor de resetat"></select>
+            <button id="reset-reporting" class="danger" type="button">Resetează contorul</button>
+          </div>
+          <p id="reset-status" class="notice" role="status"></p>
+        </div>
+      </div>
+
+      <div id="tab-company" class="tab-panel" data-tab-panel="company" role="tabpanel" aria-labelledby="tab-btn-company" hidden>
+        <div class="card">
+          <div class="row row--between">
+            <div>
+              <h1>Propuneri companie</h1>
+              <p class="muted">Propunerile sunt create de <span class="mono">company_preflight</span> în Home Assistant după fiecare citire. Aprobă sau suprimă propunerea aici; comanda este trimisă către HA, iar trimiterea efectivă rămâne în automatizarea HA.</p>
+            </div>
+            <span class="pill pill--wait">HA preflight</span>
+          </div>
+          <div id="proposals" class="history-table"></div>
+          <p class="muted">Dacă o citire nu generează propunere, verifică în HA modul companie, senzorul <span class="mono">submission_&lt;contor&gt;</span> și fereastra. Poți retrimite <span class="mono">last</span> din <strong>Raportare → Istoric → Reîncearcă HA</strong>.</p>
+        </div>
+
+        <div class="card">
+          <h1>Status companie</h1>
+          <p class="muted">Ultimele stări primite de la HA: <span class="mono">proposed</span>, <span class="mono">sending</span>, <span class="mono">accepted</span>, <span class="mono">forwarded</span>, <span class="mono">blocked</span>, <span class="mono">error</span> sau <span class="mono">suppressed</span>.</p>
+          <div id="company-status" class="history-table"></div>
+        </div>
+      </div>
+
+      <div id="tab-configuration" class="tab-panel" data-tab-panel="configuration" role="tabpanel" aria-labelledby="tab-btn-configuration" hidden>
+        <div class="card">
+          <div class="row row--between">
+            <div>
+              <h1>Case</h1>
+              <p class="muted">Casele grupează contoarele. Vizibilitatea decide dacă o casă apare pentru raportor.</p>
+            </div>
+            <button id="add-house" class="ghost" type="button">Adaugă casă</button>
+          </div>
+          <div id="houses-editor" class="editor"></div>
+        </div>
+
+        <div class="card">
+          <div class="row row--between">
+            <div>
+              <h1>Contoare</h1>
+              <p class="muted">Fiecare contor este un index raportabil. Vizibilitatea decide dacă apare pentru raportor.</p>
+            </div>
+            <button id="add-meter" class="ghost" type="button">Adaugă contor</button>
+          </div>
+          <div id="editor" class="editor"></div>
+        </div>
+
+        <div class="card">
+          <h1>Notificări</h1>
+          <p class="muted">Rutarea și canalele de notificare sunt administrate în Home Assistant, nu în MQTT.</p>
+          <div id="notifications" class="form-grid"></div>
+        </div>
+
+        <div class="card">
+          <h1>Publicare</h1>
+          <p class="muted">Publicarea scrie întreaga configurație în topicul retained <span class="mono">meters/&lt;instalație&gt;/config</span>.</p>
+          <div class="row">
+            <button id="save" class="primary" type="button">Publică configurația</button>
+            <button id="load-seed" class="ghost" type="button">Încarcă exemplu</button>
+            <button id="copy-config" class="ghost" type="button">Copiază JSON</button>
+          </div>
+          <details>
+            <summary>JSON publicat</summary>
+            <pre id="config-json" class="code" aria-live="polite"></pre>
+          </details>
+        </div>
+      </div>
+
+      <div id="tab-access" class="tab-panel" data-tab-panel="access" role="tabpanel" aria-labelledby="tab-btn-access" hidden>
+        <div class="card">
+          <h1>Invitație raportor</h1>
+          <p class="muted">Lipește tokenul raportorului creat în Flespi. Linkul conține tokenul în fragment; nu îl publica.</p>
+          <label class="field">
+            <span>Token raportor</span>
+            <input id="reporter-token" type="password" autocomplete="off" spellcheck="false">
+          </label>
+          <div class="row">
+            <button id="make-invite" class="ghost" type="button">Generează link</button>
+            <input id="invite" readonly placeholder="Linkul apare aici">
+          </div>
+        </div>
+
+        <div class="card">
+          <h1>Sesiune</h1>
+          <p class="muted">Tokenul de administrare rămâne doar în această sesiune de browser.</p>
+          <div class="row">
+            <button id="logout" class="danger" type="button">Deconectare</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <p id="fatal" class="fatal" hidden></p>
+  </main>
+
+  <div id="modal" class="modal" hidden>
+    <div class="modal__box">
+      <div class="row row--between">
+        <strong id="modal-title">Foto</strong>
+        <button id="modal-close" class="ghost" type="button">Închide</button>
+      </div>
+      <img id="modal-img" alt="Foto contor" class="modal__img">
+    </div>
+  </div>
+
+  <footer class="footer">
+    <a href="index.html">Raportare</a>
+    <span id="installation-label" class="mono muted"></span>
+  </footer>
+
+  <noscript>
+    <p class="fatal">Pagina are nevoie de JavaScript.</p>
+  </noscript>
+
+  <script src="mqtt.min.js"></script>
+  <script src="js/common.js"></script>
+  <script src="js/schema.js"></script>
+  <script src="js/period.js"></script>
+  <script src="js/anomaly.js"></script>
+  <script src="js/admin.js"></script>
+</body>
+</html>
