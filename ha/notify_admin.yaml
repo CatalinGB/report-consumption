@@ -63,11 +63,9 @@ sequence:
       target: "{{ target | default('kalioPhone') }}"
       title: "{{ title }}"
       message: "{{ message }}"
-      data: >-
-        {% set d = dict(data) if data is mapping else {} %}
-        {% set _ = d.update({'url': (d.get('url', '') or admin_url),
-                             'url_title': (d.get('url_title', '') or 'Open administration')}) %}
-        {{ d }}
+      data:
+        url: "{{ (data.get('url', '') if data is mapping else '') or admin_url }}"
+        url_title: "{{ (data.get('url_title', '') if data is mapping else '') or 'Open administration' }}"
 
 mode: parallel
 max: 20

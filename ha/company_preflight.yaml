@@ -62,7 +62,7 @@ actions:
       status_entity: "sensor.company_status_{{ meter_id | string | replace('-', '_') }}"
       status_state: "{{ states(status_entity) }}"
       status_period: "{{ state_attr(status_entity, 'period') }}"
-      status_uncertain: "{{ state_attr(status_entity, 'uncertain') | bool }}"
+      status_uncertain: "{{ state_attr(status_entity, 'uncertain') | default(false, true) | bool }}"
       status_protected: >-
         {{ status_period == period and
            status_state in ['accepted', 'forwarded', 'suppressed', 'sending'] }}
@@ -86,7 +86,7 @@ actions:
                     'by': 'ha', 'submitted_by': submitted_by,
                     'submitted_at': payload.get('submitted_at')} %}
         {% if range_state is not none %}
-          {% set _ = p.update({'range_state': range_state}) %}
+          {% set p = p | combine({'range_state': range_state}) %}
         {% endif %}
         {{ p | tojson }}
   - condition: template
