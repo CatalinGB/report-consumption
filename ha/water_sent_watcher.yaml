@@ -55,6 +55,8 @@ actions:
       house_name: "{{ (house.get('name') or house_id) if house else (house_id or 'Casa') }}"
       meter_name: "{{ meter.get('name', source_meter_id) if meter is mapping else source_meter_id }}"
       unit: "{{ meter.get('unit', '') if meter is mapping else '' }}"
+  - condition: template
+    value_template: "{{ meter is mapping and meter.get('kind') == 'water' }}"
   - action: script.notify_admin
     data:
       title: "Apă — {{ house_name }}"
