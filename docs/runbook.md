@@ -367,6 +367,20 @@ tested restore exists.
   state; refresh or reconnect if the badge is stale.
 - An approve command for a suppressed period is refused.
 
+### Verify a provider submission
+
+`company_submit` now checks the provider integration's
+`ultima_citire_transmisa` / `ultima_citire_transmisa_la` attributes as well as
+the index entity state. The retained status records:
+
+- `provider_last_index` and `provider_last_at` when available;
+- `confirmed: true` and `state: accepted` only when the provider index matches;
+- `state: forwarded` when the button was pressed but confirmation is missing.
+
+The admin **Companie → Status companie** table shows a **Furnizor** column with
+the provider's last transmitted index and timestamp. Verify the provider portal
+as the final source of truth; `forwarded` is not a confirmation.
+
 ### Reset a meter and restart the flow
 
 The admin **Raportare → Reset raportare** action clears the known

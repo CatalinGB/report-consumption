@@ -588,7 +588,7 @@
     }
     companyStatusEl.innerHTML = [
       '<table class="table"><thead><tr>',
-      '<th>Contor</th><th>Perioadă</th><th>Stare</th><th>Index</th><th>Detaliu</th><th>Actualizat</th>',
+      '<th>Contor</th><th>Perioadă</th><th>Stare</th><th>Index</th><th>Furnizor</th><th>Detaliu</th><th>Actualizat</th>',
       '</tr></thead><tbody>',
       keys.map(function (key) {
         var status = statuses[key];
@@ -597,12 +597,19 @@
         var unit = meter ? meter.unit : "";
         var tags = ['<span class="badge">' + RC.escape(status.state || "—") + '</span>'];
         if (status.uncertain) tags.push('<span class="badge badge--warn">incert</span>');
+        if (status.confirmed) tags.push('<span class="badge badge--ok">confirmat</span>');
         if (status.gate) tags.push('<span class="badge badge--muted">gate ' + RC.escape(status.gate) + '</span>');
+        var provider = '—';
+        if (status.provider_last_index !== null && status.provider_last_index !== undefined) {
+          provider = '<strong>' + RC.fmtIndex(status.provider_last_index, meter ? meter.precision : 0) + '</strong> ' + RC.escape(unit);
+          if (status.provider_last_at) provider += '<br><span class="mono muted">' + RC.escape(String(status.provider_last_at).replace("T", " ").slice(0, 16)) + '</span>';
+        }
         return '<tr>' +
           '<td>' + RC.escape(name) + '</td>' +
           '<td class="mono">' + RC.escape(status.period || "—") + '</td>' +
           '<td>' + tags.join(" ") + '</td>' +
           '<td>' + (status.index !== null && status.index !== undefined ? '<strong>' + RC.fmtIndex(status.index, meter ? meter.precision : 0) + '</strong> ' + RC.escape(unit) : '—') + '</td>' +
+          '<td>' + provider + '</td>' +
           '<td>' + RC.escape(status.detail || "—") + '</td>' +
           '<td class="mono">' + RC.escape(String(status.updated_at || status.at || "").replace("T", " ").slice(0, 16)) + '</td>' +
           '</tr>';

@@ -142,6 +142,10 @@ actions:
       same_entity: "{{ index_entity == number_entity }}"
       pre_press_index: >-
         {{ states(index_entity) if index_entity and number_entity and index_entity != number_entity else '' }}
+      provider_last_index: >-
+        {{ state_attr(index_entity, 'ultima_citire_transmisa') if index_entity else none }}
+      provider_last_at: >-
+        {{ state_attr(index_entity, 'ultima_citire_transmisa_la') if index_entity else none }}
       range_state_ok: >-
         {{ status_range_state in [none, ''] or
            status_range_state in ['ok', 'unknown', 'warn'] }}
@@ -535,13 +539,15 @@ actions:
                 value_template: "{{ not (same_entity | bool) }}"
             then:
               - wait_template: >-
-                  {{ states(index_entity) | float(-1) == command_index | float(-2) }}
+                  {{ (states(index_entity) | float(-1)) == (command_index | float(-2)) or
+                     (state_attr(index_entity, 'ultima_citire_transmisa') | float(-1)) == (command_index | float(-2)) }}
                 timeout: "00:00:45"
                 continue_on_timeout: true
               - variables:
                   confirmed: >-
                     {{ wait.completed and
-                       (pre_press_index | float(-1)) != (command_index | float(-2)) }}
+                       ((states(index_entity) | float(-1)) == (command_index | float(-2)) or
+                        (state_attr(index_entity, 'ultima_citire_transmisa') | float(-1)) == (command_index | float(-2))) }}
             else:
               - delay: "00:00:10"
           - action: mqtt.publish
@@ -556,6 +562,9 @@ actions:
                     'previous_index': status_previous_index, 'delta': status_delta,
                     'by': 'company_submitter', 'gate': 'on',
                     'updated_at': now().isoformat(),
+                    'provider_last_index': (provider_last_index | float(-1)) if provider_last_index not in [none, '', 'None'] else none,
+                    'provider_last_at': provider_last_at,
+                    'confirmed': confirmed | bool,
                     'detail': ('company index confirmed' if (confirmed | bool) else
                                ('button pressed; index entity is the same as the number entity; verify the company index' if (same_entity | bool) else
                                 'button pressed; verify the company index'))} | tojson }}
