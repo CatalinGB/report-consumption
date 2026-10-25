@@ -913,10 +913,11 @@ flowchart TD
 ```
 
 **Happy path.** The reporter page shows the meter but no input form. Reminders and the close alert
-skip external meters. The water sent watcher listens for `state_changed`, resolves the entity
-through the private `sources` mapping, ignores unknown/unavailable values, and reports the first
-real value as "prima valoare". It only notifies; it never sets a provider entity or publishes a
-submission.
+skip external meters. The water sent watcher uses a debounced state trigger on the private
+water-index entity, resolves the meter through the `sources` mapping, ignores
+unknown/unavailable values, and reports the first real value as "prima valoare". It only
+notifies; it never sets a provider entity or publishes a submission. It must not use an
+unfiltered `state_changed` event trigger, which floods the HA activity view.
 
 **Failure and edge paths.**
 

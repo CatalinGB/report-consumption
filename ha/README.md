@@ -245,8 +245,10 @@ any approve that starts afterwards is refused. See
 
 ## 8. Water sent watcher
 
-[`water_sent_watcher.yaml`](water_sent_watcher.yaml) listens to `state_changed`
-events and resolves the entity through `sensor.meter_operations.sources`. It
+[`water_sent_watcher.yaml`](water_sent_watcher.yaml) uses a debounced state
+trigger on the private water-index entity and resolves the meter through
+`sensor.meter_operations.sources`. Add one trigger per source; do not use an
+unfiltered `state_changed` event trigger. It
 notifies only; it never sets a provider entity or publishes a submission. It
 ignores unknown/unavailable values and reports the first real value as
 "prima valoare".
