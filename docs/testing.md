@@ -6,10 +6,13 @@
 npm test
 ```
 
-- `tests/anomaly.test.js` — expected range, normal/refuse margins, proration,
-  first reading, meter reset, water decimals, invalid values.
+- `tests/anomaly.test.js` — expected range, normal/refuse margins, day-proration
+  fallback, period-based monthly math, corrections, skipped months, missing or
+  future baseline periods (`config_error`), first reading, meter reset, water
+  decimals, invalid values.
 - `tests/period.test.js` — same-month and cross-month windows, late periods,
-  upcoming periods, already-reported periods, no-window meters.
+  upcoming periods, already-reported periods, no-window meters, and baseline
+  period derivation from a reading date.
 - `tests/schema.test.js` — house grouping/visibility, seasonal gas profile,
   percent thresholds, migration fallback and config validation.
 
@@ -31,6 +34,7 @@ Then:
 ```bash
 npm run e2e
 npm run e2e:multi
+npm run e2e:periods
 ```
 
 `tests/e2e-browser.js` publishes a self-contained test config (30-day-old
@@ -52,6 +56,13 @@ only `electricity-b` under the House B heading, while the admin shows both house
 and the gas Citiri form; smart water is excluded from Citiri. It also submits an
 `electricity-a` reading through the admin Citiri form and checks the retained
 `last/electricity-a` payload has `submitted_by: admin`.
+
+`npm run e2e:periods` is the monthly-period regression. It publishes a previous
+period submission, verifies that the next reading is evaluated as one typical
+month (not a three-day spike), verifies that a baseline in the same period is a
+blocking `config_error`, and verifies that a late current period with an
+unreported previous period offers the period selector and defaults to the
+earlier (catch-up) period.
 
 ## Manual E2E evidence (2026-10-17)
 
@@ -168,6 +179,9 @@ cycle. The Flespi ↔ home Mosquitto bridge is now connected.
   to `idle`.
 - `npm run healthcheck` returned `bridge healthcheck: OK` using the retained
   HA heartbeat forwarded through the bridge.
+- `npm run healthcheck:state` compares retained `last/*` and config with the HA
+  discovery sensors; it needs `RC_HA_URL` and `RC_HA_TOKEN` and exits non-zero
+  on a period, index or config mismatch.
 - The close-alert automation was run manually; it completed with no errors and no
   false alert (no window had closed in the last 24h).
 

@@ -88,6 +88,27 @@
   }
 
   /**
+   * The period a baseline reading belongs to, derived from the date it was
+   * read. A reading taken after a window closes belongs to that window's
+   * period. Cross-month windows (open 28, close 2) are anchored on the open
+   * date because the reading is usually taken while the window is open.
+   */
+  function periodForDate(window, value) {
+    var date = value instanceof Date ? value : new Date(value);
+    if (isNaN(date.getTime())) return null;
+    if (!window || !window.open_day || !window.close_day) {
+      return monthKey(date.getFullYear(), date.getMonth());
+    }
+    var crossMonth = Number(window.close_day) < Number(window.open_day);
+    for (var i = 0; i < 24; i += 1) {
+      var candidate = forMonth(window, date.getFullYear(), date.getMonth() - i);
+      var boundary = crossMonth ? candidate.open : candidate.close;
+      if (boundary <= date) return candidate.period;
+    }
+    return monthKey(date.getFullYear(), date.getMonth());
+  }
+
+  /**
    * Decide the period the reporter should submit for now.
    *
    * @param {object|null} window  the meter window ({open_day, open_time, close_day, close_time})
@@ -155,6 +176,7 @@
     state: state,
     forMonth: forMonth,
     forPeriod: forPeriod,
+    periodForDate: periodForDate,
     monthKey: monthKey
   };
 });

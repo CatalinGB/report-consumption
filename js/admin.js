@@ -26,6 +26,8 @@
   var notificationsEl = RC.$("notifications");
   var configJson = RC.$("config-json");
   var saveStatus = RC.$("save-status");
+  var configWarnings = RC.$("config-warnings");
+  var configAudit = RC.$("config-audit");
   var historyEl = RC.$("history");
   var historyHouseEl = RC.$("history-house");
   var historyHouseInitialized = false;
@@ -45,6 +47,7 @@
   var client = null;
   var submissions = {};
   var statuses = {};
+  var selectedCitirePeriods = {};
   var tabButtons = Array.prototype.slice.call(document.querySelectorAll("[data-tab]"));
   var tabPanels = Array.prototype.slice.call(document.querySelectorAll("[data-tab-panel]"));
   var toastTimer = null;
@@ -311,6 +314,7 @@
     if (input.type === "checkbox") return input.checked;
     if (input.type === "number") return input.value === "" ? null : Number(input.value);
     if (input.type === "date") return input.value ? new Date(input.value + "T12:00:00").toISOString() : null;
+    if (input.type === "month") return input.value || null;
     return input.value;
   }
 
@@ -390,6 +394,7 @@
         }).join("") + '</select></label>',
       '    <label class="field"><span>Index de bază</span><input data-path="baseline.index" type="number" step="any" value="' + text(meter.baseline ? meter.baseline.index : "") + '"></label>',
       '    <label class="field"><span>Data citirii de bază</span><input data-path="baseline.at" type="date" value="' + text(meter.baseline && meter.baseline.at ? String(meter.baseline.at).slice(0, 10) : "") + '"></label>',
+      '    <label class="field"><span>Perioada citirii de bază</span><input data-path="baseline.period" type="month" value="' + text(meter.baseline && meter.baseline.period ? meter.baseline.period : "") + '"></label>',
       '    <label class="field"><span>Consum tipic / lună</span><input data-path="typical_month" type="number" step="any" min="0" value="' + text(meter.typical_month) + '"></label>',
       '    <label class="field"><span>Mod marje</span><select data-path="thresholds.mode">' +
         ['absolute', 'percent'].map(function (mode) {
@@ -434,6 +439,31 @@
 
   function renderJson() {
     configJson.textContent = config ? JSON.stringify(config, null, 2) : RC.t("empty_config");
+    renderWarnings();
+    if (configAudit) {
+      if (!config || !config.last_change) {
+        configAudit.textContent = "";
+      } else {
+        var change = config.last_change;
+        configAudit.textContent = "Revizia " + (config.revision || "—") + " · " + (change.by || "—") +
+          " · " + String(change.at || "").replace("T", " ").slice(0, 16) +
+          " · " + ((change.changes || []).length ? change.changes.length + " modificări" : "fără modificări de câmpuri");
+      }
+    }
+  }
+
+  function renderWarnings() {
+    if (!configWarnings) return;
+    var list = config ? RCSchema.warnings(config) : [];
+    if (!list.length) {
+      configWarnings.hidden = true;
+      configWarnings.innerHTML = "";
+      return;
+    }
+    configWarnings.hidden = false;
+    configWarnings.innerHTML = list.map(function (warning) {
+      return '<div>' + RC.escape(warning) + '</div>';
+    }).join("");
   }
 
   function preferredAdminHouse(storageKey, houses) {
@@ -502,7 +532,7 @@
     });
     historyEl.innerHTML = [
       '<table class="table"><thead><tr>',
-      '<th>Casă</th><th>Contor</th><th>Perioadă</th><th>Index</th><th>Trimis</th><th>Stare</th><th>Foto</th><th>Acțiuni</th>',
+      '<th>Casă</th><th>Contor</th><th>Perioadă</th><th>Index</th><th>Interval</th><th>Trimis</th><th>Stare</th><th>Foto</th><th>Acțiuni</th>',
       '</tr></thead><tbody>',
       rows.map(function (row) {
         var meter = (config && config.meters || []).filter(function (m) { return m.id === row.meter_id; })[0];
@@ -514,15 +544,21 @@
         if (row.late) tags.push('<span class="badge badge--warn">întârziat</span>');
         if (row.corrected) tags.push('<span class="badge badge--muted">corectat</span>');
         if (status) tags.push('<span class="badge">' + RC.escape(status.state || "") + '</span>');
+        var protectedStatus = status && (status.state === "sending" || status.state === "accepted" ||
+          status.state === "forwarded" || (status.state === "error" && status.uncertain));
         return '<tr>' +
           '<td>' + RC.escape(house) + '</td>' +
           '<td>' + RC.escape(name) + '</td>' +
           '<td class="mono">' + RC.escape(row.period) + '</td>' +
           '<td><strong>' + RC.fmtIndex(row.index, meter ? meter.precision : 0) + '</strong> ' + RC.escape(unit) + '</td>' +
+          '<td>' + (row.range_state ? '<span class="badge badge--muted">' + RC.escape(row.range_state) + '</span>' : '—') + '</td>' +
           '<td class="mono">' + RC.escape(String(row.submitted_at || "").replace("T", " ").slice(0, 16)) + '</td>' +
           '<td>' + tags.join(" ") + '</td>' +
           '<td>' + (row.photo ? '<button class="ghost view-photo" data-meter="' + RC.escape(row.meter_id) + '" data-period="' + RC.escape(row.period) + '" type="button">Vezi</button>' : '—') + '</td>' +
-          '<td>' + (latestByMeter[row.meter_id] === row.period ? '<button class="ghost retry-ha" data-meter="' + RC.escape(row.meter_id) + '" data-period="' + RC.escape(row.period) + '" type="button">Reîncearcă HA</button>' : '—') + '</td>' +
+          '<td>' +
+            (latestByMeter[row.meter_id] === row.period ? '<button class="ghost retry-ha" data-meter="' + RC.escape(row.meter_id) + '" data-period="' + RC.escape(row.period) + '" type="button">Reîncearcă HA</button> ' : '') +
+            (!protectedStatus ? '<button class="danger invalidate-reading" data-meter="' + RC.escape(row.meter_id) + '" data-period="' + RC.escape(row.period) + '" type="button">Invalidează</button>' : '') +
+          '</td>' +
           '</tr>';
       }).join(""),
       '</tbody></table>'
@@ -588,7 +624,7 @@
     }
     companyStatusEl.innerHTML = [
       '<table class="table"><thead><tr>',
-      '<th>Contor</th><th>Perioadă</th><th>Stare</th><th>Index</th><th>Furnizor</th><th>Detaliu</th><th>Actualizat</th>',
+      '<th>Contor</th><th>Perioadă</th><th>Stare</th><th>Index</th><th>Furnizor</th><th>Detaliu</th><th>Actualizat</th><th>Acțiune</th>',
       '</tr></thead><tbody>',
       keys.map(function (key) {
         var status = statuses[key];
@@ -612,6 +648,9 @@
           '<td>' + provider + '</td>' +
           '<td>' + RC.escape(status.detail || "—") + '</td>' +
           '<td class="mono">' + RC.escape(String(status.updated_at || status.at || "").replace("T", " ").slice(0, 16)) + '</td>' +
+          '<td>' + (status.state === "suppressed"
+            ? '<button class="ghost reopen-period" data-meter="' + RC.escape(status.meter_id) + '" data-period="' + RC.escape(status.period || "") + '" type="button">Redeschide</button>'
+            : '—') + '</td>' +
           '</tr>';
       }).join(""),
       '</tbody></table>'
@@ -748,13 +787,103 @@
     });
   }
 
+  function invalidateReading(meterId, period) {
+    if (!client || !connected) {
+      setStatus("Nu ești conectat la MQTT.", "err");
+      return;
+    }
+    var meter = meterById(meterId);
+    var submission = submissions[meterId + "|" + period];
+    var status = statuses[meterId + "|" + period];
+    if (!meter || !submission) {
+      setStatus("Citirea nu mai există în MQTT; reîncarcă istoricul.", "err");
+      return;
+    }
+    if (status && (status.state === "sending" || status.state === "accepted" ||
+        status.state === "forwarded" || (status.state === "error" && status.uncertain))) {
+      setStatus("Invalidarea este blocată: există deja o trimitere companie „" + status.state +
+        "”. Verifică portalul furnizorului; nu transforma o trimitere incertă într-o corecție.", "err");
+      return;
+    }
+    var reason = prompt("Motivul invalidării citirii " + period + " (rămâne în audit):", "");
+    if (reason === null) return;
+    if (!confirm("Invalidezi citirea " + submission.index + " pentru " + period +
+      "? Citirea este eliminată din MQTT, iar perioada poate fi raportată din nou. Compania nu este anunțată automat.")) {
+      return;
+    }
+    var remaining = Object.keys(submissions).map(function (key) { return submissions[key]; })
+      .filter(function (row) { return row && row.meter_id === meterId && row.period !== period; })
+      .sort(function (a, b) { return String(b.period).localeCompare(String(a.period)); });
+    var now = new Date().toISOString();
+    var lastPayload = remaining.length
+      ? Object.assign({}, remaining[0], { silent: true })
+      : {
+        v: 1,
+        installation: installation,
+        meter_id: meterId,
+        period: "reset",
+        index: null,
+        submitted_at: now,
+        submitted_by: "company_submitter",
+        reset: true,
+        cleared_at: now,
+        silent: true
+      };
+    var statusPayload = {
+      v: 1,
+      meter_id: meterId,
+      period: period,
+      state: "invalidated",
+      index: submission.index,
+      previous_index: submission.previous_index,
+      delta: submission.delta,
+      by: "company_submitter",
+      gate: "off",
+      updated_at: now,
+      invalidated_at: now,
+      detail: "reading invalidated" + (reason ? ": " + String(reason).slice(0, 180) : "")
+    };
+    var jobs = [
+      { topic: "meters/" + installation + "/submission/" + meterId + "/" + period, payload: "" },
+      { topic: "meters/" + installation + "/photo/" + meterId + "/" + period, payload: "" },
+      { topic: "meters/" + installation + "/status/" + meterId + "/" + period, payload: JSON.stringify(statusPayload) },
+      { topic: "meters/" + installation + "/last/" + meterId, payload: JSON.stringify(lastPayload) }
+    ];
+    var pending = jobs.length;
+    var failures = [];
+    jobs.forEach(function (job) {
+      client.publish(job.topic, job.payload, { qos: 1, retain: true }, function (err) {
+        if (err) failures.push(job.topic);
+        pending -= 1;
+        if (pending > 0) return;
+        delete submissions[meterId + "|" + period];
+        statuses[meterId + "|" + period] = statusPayload;
+        renderHistory();
+        renderProposals();
+        renderCompanyStatus();
+        setStatus(failures.length
+          ? "Invalidare parțială: " + failures.length + " topic(uri) au eșuat."
+          : "Citirea " + period + " a fost invalidată. Poți raporta din nou perioada.",
+          failures.length ? "err" : "ok");
+      });
+    });
+  }
+
   function publishCompanyCommand(meterId, period, action, row) {
     if (!client || !connected) {
       setStatus("Nu ești conectat la MQTT.", "err");
       return;
     }
     var status = statuses[meterId + "|" + period];
-    if (!status || status.state !== "proposed" || status.index === null || status.index === undefined) {
+    if (action === "reopen") {
+      if (!status || status.state !== "suppressed") {
+        setStatus("Doar o perioadă suprimată poate fi redeschisă.", "err");
+        return;
+      }
+      if (!confirm("Redeschizi perioada " + period + " pentru o corecție? Următoarea citire poate genera o nouă propunere; trimiterea cere din nou aprobare și comutatorul global.")) {
+        return;
+      }
+    } else if (!status || status.state !== "proposed" || status.index === null || status.index === undefined) {
       setStatus("Propunerea nu mai este în așteptare sau nu are un index valid. Reîncarcă datele.", "err");
       return;
     }
@@ -778,7 +907,8 @@
         setStatus("Comanda a eșuat: " + err.message, "err");
         return;
       }
-      setStatus(action === "approve" ? "Aprobare trimisă către HA." : "Suprimare trimisă către HA.", "ok");
+      setStatus(action === "approve" ? "Aprobare trimisă către HA." :
+        (action === "reopen" ? "Redeschidere trimisă către HA." : "Suprimare trimisă către HA."), "ok");
     });
   }
 
@@ -802,39 +932,131 @@
       return String(b.period).localeCompare(String(a.period));
     });
     if (candidates.length) {
-      return { index: Number(candidates[0].index), at: candidates[0].submitted_at || null };
+      var chosen = candidates[0];
+      return {
+        index: Number(chosen.index),
+        at: chosen.read_at || chosen.submitted_at || null,
+        period: chosen.period || null,
+        source: "submission"
+      };
     }
     var meter = meterById(meterId);
     if (meter && meter.baseline && meter.baseline.index !== null && meter.baseline.index !== undefined) {
-      return { index: Number(meter.baseline.index), at: meter.baseline.at || null };
+      var at = meter.baseline.at || null;
+      var derived = meter.baseline.period || (at ? RCPeriod.periodForDate(meter.window, at) : null);
+      return { index: Number(meter.baseline.index), at: at, period: derived, source: "config" };
     }
     return null;
   }
 
-  function citirePeriod(meter) {
+  function periodStateForPeriod(meter, period) {
+    var window = RCPeriod.forPeriod(meter.window, period);
+    if (!window) return citireDefaultPeriod(meter);
+    var now = new Date();
+    var reported = hasSubmission(meter.id, period);
+    var late = now > window.close;
+    var upcoming = now < window.open;
+    return {
+      period: period,
+      state: reported ? "reported" : (upcoming ? "upcoming" : (late ? "late" : "open")),
+      reported: reported,
+      opensAt: window.open,
+      closesAt: window.close,
+      late: late,
+      upcoming: upcoming
+    };
+  }
+
+  function citireDefaultPeriod(meter) {
     return RCPeriod.state(meter.window, new Date(), function (period) {
       return hasSubmission(meter.id, period);
     }, config && config.timezone);
   }
 
-  function citireEvaluate(meter, index, reset) {
-    var state = citirePeriod(meter);
-    var baseline = baselineBefore(meter.id, state.period);
-    var typical = RCSchema.typicalIndexForMonth(meter, state.period);
+  function previousPeriod(period) {
+    var parts = String(period || "").split("-");
+    if (parts.length !== 2) return null;
+    var d = new Date(Number(parts[0]), Number(parts[1]) - 2, 1);
+    if (isNaN(d.getTime())) return null;
+    return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0");
+  }
+
+  function citirePeriodChoices(meter) {
+    if (!meter.window) return [];
+    var base = citireDefaultPeriod(meter);
+    var choices = [];
+    var prev = previousPeriod(base.period);
+    if (prev) {
+      var prevState = periodStateForPeriod(meter, prev);
+      if (!prevState.upcoming && !prevState.reported) choices.push(prevState);
+    }
+    if (!choices.some(function (choice) { return choice.period === base.period; })) {
+      if (!base.upcoming || base.reported) choices.push(base);
+    }
+    choices.sort(function (a, b) { return String(a.period).localeCompare(String(b.period)); });
+    return choices;
+  }
+
+  function citirePeriod(meter) {
+    var choices = citirePeriodChoices(meter);
+    var selected = selectedCitirePeriods[meter.id];
+    if (selected) {
+      for (var i = 0; i < choices.length; i += 1) {
+        if (choices[i].period === selected) return choices[i];
+      }
+      delete selectedCitirePeriods[meter.id];
+    }
+    var base = citireDefaultPeriod(meter);
+    if (base.late && !base.reported && choices.length && choices[0].period < base.period) return choices[0];
+    return base;
+  }
+
+  function citireRangeArgs(meter, baseline, period) {
+    var typical = RCSchema.typicalIndexForMonth(meter, period);
     var args = RCSchema.thresholdArgs(meter);
-    return RCAnomaly.evaluate({
-      index: index,
+    return {
       lastIndex: baseline ? baseline.index : null,
       lastAt: baseline ? baseline.at : null,
+      lastPeriod: meter.window && baseline ? baseline.period : null,
+      period: meter.window ? (period || null) : null,
+      requireBaselinePeriod: Boolean(meter.window),
+      requireBaselineDate: false,
       typicalMonth: typical,
       thresholdMode: args.thresholdMode,
       warnDelta: args.warnDelta,
       refuseDelta: args.refuseDelta,
       warnPct: args.warnPct,
       refusePct: args.refusePct,
-      reset: Boolean(reset),
       now: new Date()
-    });
+    };
+  }
+
+  function citireEvaluate(meter, index, reset, stateOverride) {
+    var state = stateOverride || citirePeriod(meter);
+    var baseline = baselineBefore(meter.id, state.period);
+    var input = citireRangeArgs(meter, baseline, state.period);
+    input.index = index;
+    input.reset = Boolean(reset);
+    return RCAnomaly.evaluate(input);
+  }
+
+  function rangeSnapshot(result, typical) {
+    if (!result) return null;
+    return {
+      state: result.state,
+      reason: result.reason || null,
+      mode: result.thresholdMode,
+      months: result.months,
+      days: result.days,
+      typical: typical,
+      expected_index: result.expectedIndex,
+      normal_low: result.normalLow,
+      normal_high: result.normalHigh,
+      refuse_low: result.refuseLow,
+      refuse_high: result.refuseHigh,
+      warn_delta: result.warnDelta,
+      refuse_delta: result.refuseDelta
+    };
   }
 
   function typicalText(meter, period) {
@@ -856,16 +1078,32 @@
     var typicalLabel = typicalText(meter, state.period);
     var disabled = state.state === "upcoming";
     var last = baseline ? RC.fmtIndex(baseline.index, meter.precision) + " " + (meter.unit || "") : "fără valoare";
+    var baselineMeta = baseline
+      ? [baseline.period || "", baseline.at ? String(baseline.at).replace("T", " ").slice(0, 16) : ""].filter(Boolean).join(" · ")
+      : "";
+    var choices = citirePeriodChoices(meter);
+    var selector = choices.length > 1
+      ? '    <label class="field"><span>Perioada raportată</span><select class="citire-period-select">' +
+        choices.map(function (choice) {
+          var label = choice.period;
+          if (choice.reported) label += " · corecție";
+          else if (choice.late) label += " · restant";
+          return '<option value="' + RC.escape(choice.period) + '"' + (choice.period === state.period ? ' selected' : '') + '>' + RC.escape(label) + '</option>';
+        }).join("") + '</select></label>'
+      : "";
     return [
       '<article class="meter" data-citire-id="' + RC.escape(meter.id) + '">',
       '  <div class="meter__head"><div><h2>' + RC.escape(meter.name || meter.id) + '</h2>',
       '    <div class="meter__provider">' + RC.escape(RCSchema.houseName(config, meter)) + ' · ' + RC.escape(meter.provider || "") + '</div></div>',
       '    <span class="badge badge--muted">' + RC.escape(meter.id) + '</span></div>',
       '  <div class="meter__grid">',
-      '    <div class="stat"><div class="stat__label">Ultimul index</div><div class="stat__value">' + RC.escape(last) + '</div></div>',
+      '    <div class="stat"><div class="stat__label">Ultimul index</div><div class="stat__value">' + RC.escape(last) + '</div>',
+      '      <div class="mono muted">' + RC.escape(baselineMeta) + '</div></div>',
       '    <div class="stat"><div class="stat__label">Tipic</div><div class="stat__value">' + typicalLabel + '</div></div>',
       '    <div class="stat"><div class="stat__label">Perioadă</div><div class="stat__value">' + RC.escape(state.period) + '</div></div>',
       '  </div>',
+      selector,
+      state.reported ? '  <p class="hint">Corecție: raportarea anterioară pentru această perioadă este înlocuită.</p>' : "",
       '  <div class="meter__form">',
       '    <label class="field"><span>Index nou</span><input class="citire-input" type="number" inputmode="decimal" step="any" min="0" value=""' + (disabled ? " disabled" : "") + '></label>',
       '    <p class="hint" data-role="citire-hint">' + (state.state === "upcoming" ? "Fereastra nu este deschisă." : (state.reported ? "Corectează perioada " + RC.escape(state.period) + "." : "Introdu indexul citit.")) + '</p>',
@@ -911,12 +1149,20 @@
       submit.disabled = true;
       return;
     }
-    var result = citireEvaluate(meter, value, false);
-    var labels = { ok: "Valoare în interval.", warn: "Valoare neobișnuită; confirmă.", refuse: "Valoare refuzată; verifică indexul.", unknown: "Prima citire; intervalul se activează după.", rollover: "Index sub ultima valoare; confirmă resetarea.", invalid: "Valoare invalidă." };
+    var result = citireEvaluate(meter, value, false, citirePeriod(meter));
+    var labels = {
+      ok: "Valoare în interval.",
+      warn: "Valoare neobișnuită; confirmă.",
+      refuse: "Valoare refuzată; verifică indexul.",
+      unknown: "Prima citire; intervalul se activează după.",
+      rollover: "Index sub ultima valoare; confirmă resetarea.",
+      invalid: "Valoare invalidă.",
+      config_error: "Configurație incompletă: corectează data/perioada citirii de bază."
+    };
     hint.textContent = labels[result.state] || "";
     stateEl.textContent = result.state === "ok" || result.state === "unknown" ? "OK" : (result.state === "warn" ? "Verifică" : "Blocat");
     stateEl.className = "state " + (result.state === "ok" || result.state === "unknown" ? "state--ok" : "state--warn");
-    submit.disabled = result.state === "refuse" || result.state === "invalid" || result.state === "rollover";
+    submit.disabled = result.state === "refuse" || result.state === "invalid" || result.state === "rollover" || result.state === "config_error";
   }
 
   function submitCitire(meter) {
@@ -938,13 +1184,18 @@
       setStatus("Fereastra nu este încă deschisă; reîncarcă lista de citiri.", "err");
       return;
     }
-    var result = citireEvaluate(meter, value, false);
+    var result = citireEvaluate(meter, value, false, state);
+    if (result.state === "config_error") {
+      setStatus("Configurație incompletă: corectează data sau perioada citirii de bază înainte de a trimite.", "err");
+      return;
+    }
     if (result.state === "refuse" || result.state === "invalid" || result.state === "rollover") {
       setStatus("Citirea necesită corectare sau confirmare.", "err");
       return;
     }
     if (result.state === "warn" && !confirm("Valoarea este neobișnuită. O trimiți oricum?")) return;
     var baseline = baselineBefore(meter.id, state.period);
+    var typical = RCSchema.typicalIndexForMonth(meter, state.period);
     var submission = RCSchema.buildSubmission({
       installation: installation,
       meter: meter,
@@ -953,6 +1204,7 @@
       previous: baseline,
       submitted_by: "company_submitter",
       range_state: result.state,
+      range: rangeSnapshot(result, typical),
       photo: false,
       late: Boolean(state.late),
       corrected: Boolean(state.reported),
@@ -1115,6 +1367,15 @@
     if (meter) submitCitire(meter);
   });
 
+  citiriEl.addEventListener("change", function (event) {
+    if (!event.target.classList.contains("citire-period-select")) return;
+    var card = event.target.closest("[data-citire-id]");
+    var meter = card ? meterById(card.getAttribute("data-citire-id")) : null;
+    if (!meter) return;
+    selectedCitirePeriods[meter.id] = event.target.value;
+    renderCitiri();
+  });
+
   RC.$("add-meter").addEventListener("click", function () {
     if (!config) config = { v: 1, schema: 3, installation: installation, houses: [fallbackHouse()], meters: [] };
     config.meters = config.meters || [];
@@ -1183,6 +1444,12 @@
     modalImg.removeAttribute("src");
   });
 
+  if (companyStatusEl) companyStatusEl.addEventListener("click", function (event) {
+    var target = event.target;
+    if (!target.classList.contains("reopen-period")) return;
+    publishCompanyCommand(target.getAttribute("data-meter"), target.getAttribute("data-period"), "reopen", target.closest("tr"));
+  });
+
   proposalsEl.addEventListener("click", function (event) {
     var target = event.target;
     var row = target.closest("tr");
@@ -1201,6 +1468,10 @@
     }
     if (target.classList.contains("retry-ha")) {
       retryCompanyPreflight(target.getAttribute("data-meter"), target.getAttribute("data-period"));
+      return;
+    }
+    if (target.classList.contains("invalidate-reading")) {
+      invalidateReading(target.getAttribute("data-meter"), target.getAttribute("data-period"));
     }
   });
 
@@ -1237,9 +1508,56 @@
     }, 5000);
   }
 
+  function auditValue(value) {
+    if (value === undefined) return null;
+    if (value && typeof value === "object") return JSON.parse(JSON.stringify(value));
+    return value;
+  }
+
+  function sameAuditValue(a, b) {
+    return JSON.stringify(auditValue(a)) === JSON.stringify(auditValue(b));
+  }
+
+  function collectConfigChanges(before, after) {
+    var changes = [];
+    var fields = [
+      "baseline.index", "baseline.at", "baseline.period",
+      "typical_month", "thresholds.mode", "thresholds.warn_margin",
+      "thresholds.refuse_margin", "thresholds.warn_pct", "thresholds.refuse_pct",
+      "window.open_day", "window.open_time", "window.close_day", "window.close_time",
+      "visible", "reading_mode"
+    ];
+    var oldMeters = {};
+    var newMeters = {};
+    ((before && before.meters) || []).forEach(function (meter) {
+      if (meter && meter.id) oldMeters[meter.id] = meter;
+    });
+    ((after && after.meters) || []).forEach(function (meter) {
+      if (meter && meter.id) newMeters[meter.id] = meter;
+    });
+    Object.keys(newMeters).sort().forEach(function (id) {
+      fields.forEach(function (field) {
+        var from = getPath(oldMeters[id] || {}, field);
+        var to = getPath(newMeters[id], field);
+        if (sameAuditValue(from, to)) return;
+        changes.push({ meter_id: id, field: field, from: auditValue(from), to: auditValue(to) });
+      });
+    });
+    return changes.slice(0, 60);
+  }
+
   function normalizeConfig() {
+    var before = config ? JSON.parse(JSON.stringify(config)) : null;
     var out = RCSchema.normalize(config, installation);
     out.updated_at = new Date().toISOString();
+    out.revision = (Number(config && config.revision) || 0) + 1;
+    out.updated_by = "company_submitter";
+    out.last_change = {
+      at: out.updated_at,
+      by: "company_submitter",
+      revision: out.revision,
+      changes: collectConfigChanges(before, out)
+    };
     out.meters = (out.meters || []).map(function (meter) {
       delete meter._new;
       delete meter._newHouse;

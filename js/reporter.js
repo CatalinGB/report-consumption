@@ -29,6 +29,7 @@
   var submissions = {};
   var drafts = {};
   var photoDrafts = {};
+  var selectedPeriods = {};
   var connected = false;
   var client = null;
   var flushing = false;
@@ -193,10 +194,76 @@
     return null;
   }
 
-  function periodStateFor(meter) {
+  function defaultPeriodState(meter) {
     return RCPeriod.state(meter.window, new Date(), function (period) {
       return hasSubmission(meter.id, period);
     }, config && config.timezone);
+  }
+
+  function periodStateForPeriod(meter, period) {
+    var window = RCPeriod.forPeriod(meter.window, period);
+    if (!window) return defaultPeriodState(meter);
+    var now = new Date();
+    var reported = hasSubmission(meter.id, period);
+    var late = now > window.close;
+    var upcoming = now < window.open;
+    return {
+      period: period,
+      state: reported ? "reported" : (upcoming ? "upcoming" : (late ? "late" : "open")),
+      reported: reported,
+      opensAt: window.open,
+      closesAt: window.close,
+      late: late,
+      upcoming: upcoming
+    };
+  }
+
+  function previousPeriod(period) {
+    var parts = String(period || "").split("-");
+    if (parts.length !== 2) return null;
+    var d = new Date(Number(parts[0]), Number(parts[1]) - 2, 1);
+    if (isNaN(d.getTime())) return null;
+    return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0");
+  }
+
+  /**
+   * The reporter normally follows the automatic period. A late or missed
+   * period can be selected explicitly, so a catch-up reading is not booked as
+   * the current month.
+   */
+  function periodChoices(meter) {
+    if (!meter.window) return [];
+    var base = defaultPeriodState(meter);
+    var choices = [];
+    var prev = previousPeriod(base.period);
+    if (prev) {
+      var prevState = periodStateForPeriod(meter, prev);
+      if (!prevState.upcoming && !prevState.reported) choices.push(prevState);
+    }
+    if (!choices.some(function (choice) { return choice.period === base.period; })) {
+      if (!base.upcoming || base.reported) choices.push(base);
+    }
+    choices.sort(function (a, b) { return String(a.period).localeCompare(String(b.period)); });
+    return choices;
+  }
+
+  function periodStateFor(meter) {
+    var choices = periodChoices(meter);
+    var selected = selectedPeriods[meter.id];
+    if (selected) {
+      for (var i = 0; i < choices.length; i += 1) {
+        if (choices[i].period === selected) return choices[i];
+      }
+      delete selectedPeriods[meter.id];
+    }
+    var base = defaultPeriodState(meter);
+    // If the current window is already late and the previous period is also
+    // unreported, report the earlier period first. This prevents a catch-up
+    // reading from being booked as the current month.
+    if (base.late && !base.reported && choices.length && choices[0].period < base.period) {
+      return choices[0];
+    }
+    return base;
   }
 
   function baselineBefore(meterId, period) {
@@ -207,15 +274,19 @@
       return String(b.period).localeCompare(String(a.period));
     });
     if (candidates.length) {
+      var chosen = candidates[0];
       return {
-        index: Number(candidates[0].index),
-        at: candidates[0].submitted_at || null,
-        period: candidates[0].period
+        index: Number(chosen.index),
+        at: chosen.read_at || chosen.submitted_at || null,
+        period: chosen.period || null,
+        source: "submission"
       };
     }
     var meter = meterById(meterId);
     if (meter && meter.baseline && meter.baseline.index !== null && meter.baseline.index !== undefined) {
-      return { index: Number(meter.baseline.index), at: meter.baseline.at || null, period: null };
+      var at = meter.baseline.at || null;
+      var derived = meter.baseline.period || (at ? RCPeriod.periodForDate(meter.window, at) : null);
+      return { index: Number(meter.baseline.index), at: at, period: derived, source: "config" };
     }
     return null;
   }
@@ -223,48 +294,64 @@
   function latestForDisplay(meter, state) {
     if (state.reported) {
       var current = submissions[key(meter.id, state.period)];
-      if (current) return { index: current.index, at: current.submitted_at, period: current.period };
+      if (current) return { index: current.index, at: current.submitted_at, period: current.period, source: "submission" };
     }
     return baselineBefore(meter.id, state.period);
   }
 
-  function expectedInfo(meter, baseline, period) {
+  function rangeArgs(meter, baseline, period) {
     var typical = RCSchema.typicalIndexForMonth(meter, period);
-    if (!baseline || !baseline.at || baseline.index === null || typical === null) return null;
     var args = RCSchema.thresholdArgs(meter);
-    var result = RCAnomaly.evaluate({
-      index: baseline.index,
-      lastIndex: baseline.index,
-      lastAt: baseline.at,
-      typicalMonth: typical,
-      thresholdMode: args.thresholdMode,
-      warnDelta: args.warnDelta,
-      refuseDelta: args.refuseDelta,
-      warnPct: args.warnPct,
-      refusePct: args.refusePct,
-      now: new Date()
-    });
-    return result.available ? result : null;
-  }
-
-  function evaluateIndex(meter, index, reset) {
-    var state = periodStateFor(meter);
-    var baseline = baselineBefore(meter.id, state.period);
-    var typical = RCSchema.typicalIndexForMonth(meter, state.period);
-    var args = RCSchema.thresholdArgs(meter);
-    return RCAnomaly.evaluate({
-      index: index,
+    return {
       lastIndex: baseline ? baseline.index : null,
       lastAt: baseline ? baseline.at : null,
+      lastPeriod: meter.window && baseline ? baseline.period : null,
+      period: meter.window ? (period || null) : null,
+      requireBaselinePeriod: Boolean(meter.window),
+      requireBaselineDate: false,
       typicalMonth: typical,
       thresholdMode: args.thresholdMode,
       warnDelta: args.warnDelta,
       refuseDelta: args.refuseDelta,
       warnPct: args.warnPct,
       refusePct: args.refusePct,
-      reset: Boolean(reset),
       now: new Date()
-    });
+    };
+  }
+
+  function expectedInfo(meter, baseline, period) {
+    if (!baseline || baseline.index === null || baseline.index === undefined) return null;
+    var typical = RCSchema.typicalIndexForMonth(meter, period);
+    if (typical === null) return null;
+    return RCAnomaly.expectedRange(rangeArgs(meter, baseline, period));
+  }
+
+  function evaluateIndex(meter, index, reset, stateOverride) {
+    var state = stateOverride || periodStateFor(meter);
+    var baseline = baselineBefore(meter.id, state.period);
+    var input = rangeArgs(meter, baseline, state.period);
+    input.index = index;
+    input.reset = Boolean(reset);
+    return RCAnomaly.evaluate(input);
+  }
+
+  function rangeSnapshot(result, typical) {
+    if (!result) return null;
+    return {
+      state: result.state,
+      reason: result.reason || null,
+      mode: result.thresholdMode,
+      months: result.months,
+      days: result.days,
+      typical: typical,
+      expected_index: result.expectedIndex,
+      normal_low: result.normalLow,
+      normal_high: result.normalHigh,
+      refuse_low: result.refuseLow,
+      refuse_high: result.refuseHigh,
+      warn_delta: result.warnDelta,
+      refuse_delta: result.refuseDelta
+    };
   }
 
   function fmt(value, meter) {
@@ -348,6 +435,7 @@
 
     return '<ul class="history__list">' + rows.map(function (row) {
       var tags = [];
+      if (row.range_state) tags.push('<span class="badge badge--muted">' + RC.t("range_state") + ': ' + RC.escape(row.range_state) + '</span>');
       if (row.late) tags.push('<span class="badge badge--warn">' + RC.t("late") + '</span>');
       if (row.corrected) tags.push('<span class="badge badge--muted">' + RC.t("corrected") + '</span>');
       if (row.photo) tags.push('<span class="badge badge--muted">' + RC.t("photo") + '</span>');
@@ -378,11 +466,33 @@
     var submitLabel = state.reported ? RC.t("correct") : RC.t("send");
     var photoEnabled = !external && (!meter.photo || meter.photo.enabled !== false);
     var step = meter.precision > 0 ? String(1 / Math.pow(10, meter.precision)) : "1";
-    var expected = info
-      ? RC.t("expected") + ": " + fmt(info.expectedIndex, meter) + " " + RC.escape(meter.unit || "") +
+    var unit = RC.escape(meter.unit || "");
+    var expected;
+    if (info && info.configError) {
+      expected = RC.t(info.reason === "period_order" ? "config_error_period" : "config_error_hint");
+    } else if (info && info.available) {
+      expected = RC.t("expected") + ": " + fmt(info.expectedIndex, meter) + " " + unit +
         " · " + RC.t("normal") + " " + fmt(info.normalLow, meter) + "–" + fmt(info.normalHigh, meter) +
-        " · " + RC.t("refuse") + " " + fmt(info.refuseLow, meter) + "–" + fmt(info.refuseHigh, meter)
-      : RC.t("expected_unavailable");
+        " · " + RC.t("refuse") + " " + fmt(info.refuseLow, meter) + "–" + fmt(info.refuseHigh, meter);
+      if (info.months !== null && info.months !== undefined) {
+        expected += " · " + RC.t("expected_consumption") + ": " + fmt(info.expectedConsumption, meter) + " " + unit;
+      }
+    } else {
+      expected = RC.t("expected_unavailable");
+    }
+    var baselineMeta = baseline
+      ? [baseline.period ? periodLabel(baseline.period) : "", baseline.at ? fmtDateTime(baseline.at) : ""].filter(Boolean).join(" · ")
+      : "";
+    var choices = periodChoices(meter);
+    var selector = choices.length > 1
+      ? '  <label class="field"><span>' + RC.t("reporting_period") + '</span><select class="period-select">' +
+        choices.map(function (choice) {
+          var label = periodLabel(choice.period);
+          if (choice.reported) label += " · " + RC.t("period_correction");
+          else if (choice.late) label += " · " + RC.t("period_late");
+          return '<option value="' + RC.escape(choice.period) + '"' + (choice.period === state.period ? ' selected' : '') + '>' + RC.escape(label) + '</option>';
+        }).join("") + '</select></label>'
+      : "";
 
     return [
       '<article class="meter" data-meter-id="' + RC.escape(meter.id) + '">',
@@ -394,13 +504,15 @@
       '  <div class="meter__grid">',
       '    <div class="stat"><div class="stat__label">' + RC.t("last_index") + '</div>',
       '      <div class="stat__value">' + (baseline ? fmt(baseline.index, meter) : RC.t("no_baseline")) + '</div>',
-      '      <div class="mono muted">' + (baseline && baseline.at ? RC.escape(fmtDateTime(baseline.at)) : "") + '</div></div>',
+      '      <div class="mono muted">' + RC.escape(baselineMeta) + '</div></div>',
       '    <div class="stat"><div class="stat__label">' + RC.t("typical") + '</div>',
       '      <div class="stat__value">' + typicalLabel + '</div></div>',
       '    <div class="stat"><div class="stat__label">' + RC.t("period") + '</div>',
       '      <div class="stat__value">' + RC.escape(periodLabel(state.period)) + '</div></div>',
       '  </div>',
       '  <p class="meter__window">' + RC.escape(windowText(meter, state)) + '</p>',
+      selector,
+      state.reported ? '  <p class="hint">' + RC.escape(RC.t("correction_hint")) + '</p>' : "",
       external
         ? '  <p class="hint">' + RC.t("external_read") + '</p>'
         : [
@@ -511,20 +623,21 @@
       return;
     }
 
-    var result = evaluateIndex(meter, value, resetInput.checked);
+    var result = evaluateIndex(meter, value, resetInput.checked, current);
     var messages = {
       ok: RC.t("ok_hint"),
       warn: RC.t("warn_hint"),
       refuse: RC.t("refuse_hint"),
       unknown: RC.t("first_hint"),
       rollover: RC.t("rollover_hint"),
-      invalid: RC.t("invalid_hint")
+      invalid: RC.t("invalid_hint"),
+      config_error: RC.t(result.reason === "period_order" ? "config_error_period" : "config_error_hint")
     };
     stateEl.textContent = result.reset
       ? RC.t("reset_hint")
       : (queue ? RC.t("queue_pending") : (messages[result.state] || ""));
     stateEl.classList.add(result.state === "ok" || result.state === "unknown" ? "state--ok" : "state--warn");
-    if (result.state === "refuse" || result.state === "invalid") {
+    if (result.state === "refuse" || result.state === "invalid" || result.state === "config_error") {
       stateEl.classList.remove("state--warn");
       stateEl.classList.add("state--refuse");
     }
@@ -726,11 +839,16 @@
 
     var reset = card.querySelector(".confirm-reset").checked;
     var warn = card.querySelector(".confirm-warn").checked;
-    var result = evaluateIndex(meter, value, reset);
+    var result = evaluateIndex(meter, value, reset, state);
     var previous = baselineBefore(meter.id, state.period);
+    var typical = RCSchema.typicalIndexForMonth(meter, state.period);
 
     if (meter.reading_mode === "external") {
       showToast(RC.t("external_read"), "warn");
+      return;
+    }
+    if (result.state === "config_error") {
+      showToast(RC.t(result.reason === "period_order" ? "config_error_period" : "config_error_hint"), "err");
       return;
     }
     if (result.state === "refuse" || result.state === "invalid") {
@@ -759,6 +877,7 @@
       previous: previous,
       submitted_by: "index_submitter",
       range_state: result.state,
+      range: rangeSnapshot(result, typical),
       photo: Boolean(photo),
       late: Boolean(state.late),
       corrected: Boolean(state.reported),
@@ -844,6 +963,13 @@
     if (!card) return;
     var meter = meterById(card.dataset.meterId);
     if (!meter) return;
+    if (target.classList.contains("period-select")) {
+      selectedPeriods[meter.id] = target.value;
+      card.querySelector(".confirm-warn").checked = false;
+      card.querySelector(".confirm-reset").checked = false;
+      render();
+      return;
+    }
     if (target.classList.contains("photo-input")) {
       onPhoto(meter, target);
       return;

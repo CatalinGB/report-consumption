@@ -6,8 +6,10 @@ description: >-
   index and period, a numeric index, a fresh command `at` (10 minutes) and the
   global publicare_companie gate. Suppress writes a durable retained
   `suppressed` state, so a later approve for the same period is refused.
-  E-mail mode requires a configured window and performs a full open/close
-  date-time check; a proposal carrying range_state=refuse is rejected. E-mail
+  A separate `reopen` action moves a suppressed/blocked period to `reopened`
+  without sending. Both provider and e-mail modes reject `range_state=refuse`
+  and `range_state=config_error`. E-mail mode requires a configured window and
+  performs a full open/close date-time check. E-mail
   writes `sending` before SMTP, and `error` + an admin notification if SMTP
   fails or the send cannot be confirmed. Commands are non-retained.
 mode: queued
@@ -21,7 +23,7 @@ conditions:
     value_template: >-
       {{ trigger.payload_json is defined and
          trigger.payload_json is mapping and
-         trigger.payload_json.action in ['approve', 'suppress'] and
+         trigger.payload_json.action in ['approve', 'suppress', 'reopen'] and
          trigger.topic is string and
          trigger.topic.startswith('meters/casa/command/') and
          trigger.topic.split('/') | length == 5 }}
@@ -60,6 +62,8 @@ actions:
       status_delta: "{{ state_attr(status_entity, 'delta') }}"
       status_proposed_at: "{{ state_attr(status_entity, 'proposed_at') }}"
       status_range_state: "{{ state_attr(status_entity, 'range_state') }}"
+      status_submission_id: "{{ state_attr(status_entity, 'submission_id') }}"
+      status_range: "{{ state_attr(status_entity, 'range') }}"
       status_topic: "meters/casa/status/{{ meter_id }}/{{ period }}"
       number_entity: "{{ company.get('number_entity', '') }}"
       submit_button: "{{ company.get('submit_button', '') }}"
@@ -150,12 +154,15 @@ actions:
         {{ status_range_state in [none, ''] or
            status_range_state in ['ok', 'unknown', 'warn'] }}
       range_state_refused: "{{ status_range_state == 'refuse' }}"
+      range_state_config_error: "{{ status_range_state == 'config_error' }}"
       range_state_bad: >-
-        {{ status_range_state not in [none, '', 'ok', 'unknown', 'warn', 'refuse'] }}
+        {{ status_range_state not in [none, '', 'ok', 'unknown', 'warn', 'refuse', 'config_error'] }}
       sending_payload: >-
         {{ {'v': 1, 'meter_id': meter_id, 'period': period,
             'state': 'sending', 'index': command_index,
             'previous_index': status_previous_index, 'delta': status_delta,
+            'range_state': status_range_state, 'submission_id': status_submission_id,
+            'range': status_range,
             'by': 'company_submitter', 'gate': 'on',
             'updated_at': now().isoformat(),
             'detail': 'send in progress'} | tojson }}
@@ -163,6 +170,46 @@ actions:
   - condition: template
     value_template: "{{ period_valid | bool }}"
   - choose:
+      - conditions: "{{ action == 'reopen' }}"
+        sequence:
+          - if:
+              - condition: template
+                value_template: >-
+                  {{ status_period != period or
+                     status_state not in ['suppressed', 'blocked'] }}
+            then:
+              - action: script.notify_admin
+                continue_on_error: true
+                data:
+                  title: "Redeschidere refuzată — {{ meter.get('name', meter_id) if meter is mapping else meter_id }}"
+                  message: >-
+                    {{ period }}: statusul este {{ status_state }}; doar o
+                    perioadă suprimată sau blocată poate fi redeschisă.
+              - stop: "status is not reopenable"
+          - action: mqtt.publish
+            data:
+              topic: "{{ status_topic }}"
+              qos: 1
+              retain: true
+              payload: >-
+                {{ {'v': 1, 'meter_id': meter_id, 'period': period,
+                    'state': 'reopened', 'index': status_index,
+                    'previous_index': status_previous_index, 'delta': status_delta,
+                    'by': 'company_submitter',
+                    'gate': 'on' if (gate | bool) else 'off',
+                    'updated_at': now().isoformat(),
+                    'reopened_at': now().isoformat(),
+                    'detail': 'period reopened by the company submitter; a new proposal needs a fresh reading and approval'} | tojson }}
+          - delay: "00:00:02"
+          - action: script.notify_admin
+            continue_on_error: true
+            data:
+              title: "Perioadă redeschisă — {{ meter.get('name', meter_id) if meter is mapping else meter_id }}"
+              message: >-
+                {{ period }}: perioada a fost redeschisă. O nouă citire poate
+                genera o propunere; trimiterea cere din nou aprobare și
+                comutatorul global.
+          - stop: "reopened"
       - conditions: "{{ action == 'suppress' }}"
         sequence:
           - if:
@@ -270,6 +317,79 @@ actions:
                     {{ meter.get('name', meter_id) if meter is mapping else meter_id }} ·
                     {{ period }}: comutatorul global de publicare este SUPRIMAT.
               - stop: "global company publishing is suppressed"
+          - if:
+              - condition: template
+                value_template: "{{ range_state_refused | bool }}"
+            then:
+              - action: mqtt.publish
+                data:
+                  topic: "{{ status_topic }}"
+                  qos: 1
+                  retain: true
+                  payload: >-
+                    {{ {'v': 1, 'meter_id': meter_id, 'period': period,
+                        'state': 'blocked', 'index': command_index,
+                        'previous_index': status_previous_index, 'delta': status_delta,
+                        'range_state': status_range_state,
+                        'by': 'ha', 'gate': 'on', 'updated_at': now().isoformat(),
+                        'detail': 'refused index: range_state=refuse'} | tojson }}
+              - action: script.notify_admin
+                continue_on_error: true
+                data:
+                  title: "Trimitere blocată — index refuzat"
+                  message: >-
+                    {{ meter.get('name', meter_id) if meter is mapping else meter_id }} ·
+                    {{ period }}: propunerea are range_state=refuse și nu poate fi trimisă.
+              - stop: "range_state=refuse"
+          - if:
+              - condition: template
+                value_template: "{{ range_state_config_error | bool }}"
+            then:
+              - action: mqtt.publish
+                data:
+                  topic: "{{ status_topic }}"
+                  qos: 1
+                  retain: true
+                  payload: >-
+                    {{ {'v': 1, 'meter_id': meter_id, 'period': period,
+                        'state': 'error', 'index': command_index,
+                        'previous_index': status_previous_index, 'delta': status_delta,
+                        'range_state': status_range_state,
+                        'by': 'ha', 'gate': 'on', 'updated_at': now().isoformat(),
+                        'detail': 'incomplete range configuration; fix the baseline date or period'} | tojson }}
+              - action: script.notify_admin
+                continue_on_error: true
+                data:
+                  title: "Trimitere blocată — configurație interval"
+                  message: >-
+                    {{ meter.get('name', meter_id) if meter is mapping else meter_id }} ·
+                    {{ period }}: range_state=config_error. Corectează data sau
+                    perioada citirii de bază.
+              - stop: "range_state=config_error"
+          - if:
+              - condition: template
+                value_template: "{{ range_state_bad | bool }}"
+            then:
+              - action: mqtt.publish
+                data:
+                  topic: "{{ status_topic }}"
+                  qos: 1
+                  retain: true
+                  payload: >-
+                    {{ {'v': 1, 'meter_id': meter_id, 'period': period,
+                        'state': 'error', 'index': command_index,
+                        'previous_index': status_previous_index, 'delta': status_delta,
+                        'range_state': status_range_state,
+                        'by': 'ha', 'gate': 'on', 'updated_at': now().isoformat(),
+                        'detail': 'unknown range_state in proposal'} | tojson }}
+              - action: script.notify_admin
+                continue_on_error: true
+                data:
+                  title: "Trimitere blocată — stare interval"
+                  message: >-
+                    {{ meter.get('name', meter_id) if meter is mapping else meter_id }} ·
+                    {{ period }}: range_state={{ status_range_state }} nu este acceptat.
+              - stop: "unknown range_state"
           - if:
               - condition: template
                 value_template: "{{ company_mode == 'email' }}"
@@ -560,6 +680,8 @@ actions:
                     'state': 'accepted' if (confirmed | bool) else 'forwarded',
                     'index': command_index,
                     'previous_index': status_previous_index, 'delta': status_delta,
+                    'range_state': status_range_state, 'submission_id': status_submission_id,
+                    'range': status_range,
                     'by': 'company_submitter', 'gate': 'on',
                     'updated_at': now().isoformat(),
                     'provider_last_index': (provider_last_index | float(-1)) if provider_last_index not in [none, '', 'None'] else none,

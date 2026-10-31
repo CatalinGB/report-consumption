@@ -130,27 +130,46 @@ contract data. See [`mqtt-schema-v3.md`](mqtt-schema-v3.md).
 ## Expected range and anomaly states
 
 All values are computed from the last accepted submission (or the seed baseline)
-and the meter's `typical_month`/`typical_by_month`:
+and the meter's `typical_month`/`typical_by_month`.
+
+For meters with a monthly `window`, the model is **period-based**:
 
 ```
-typical_index     = typical_consumption / consumption_factor
-days              = max(1, days between baseline.at and now)
+typical_index        = typical_consumption / consumption_factor
+months               = calendar months between baseline.period and period
+expected_consumption = typical_index × months
+expected_index       = baseline.index + expected_consumption
+normal_low           = expected_index - warn_margin
+normal_high          = expected_index + warn_margin
+refuse_low           = expected_index - refuse_margin
+refuse_high          = expected_index + refuse_margin
+```
+
+`baseline.period` is the period the previous reading belongs to. It is taken
+from the previous submission's `period`, or from `meters[].baseline.period`.
+When only `baseline.at` exists, the page derives the period from the reporting
+window (`periodForDate`). A baseline that resolves to the same period as the
+report is a `config_error`, not a three-day range.
+
+Meters without a window keep the legacy day-prorated fallback:
+
+```
+days = max(1, days between baseline.at and now)
 expected_consumption = typical_index × days / 30
-expected_index    = baseline.index + expected_consumption
-normal_low        = expected_index - warn_margin
-normal_high       = expected_index + warn_margin
-refuse_low        = expected_index - refuse_margin
-refuse_high       = expected_index + refuse_margin
 ```
 
 States:
 
 - **ok** — inside `[normal_low, normal_high]`.
 - **warn** — outside the normal band but inside `[refuse_low, refuse_high]`.
-- **refuse** — outside `[refuse_low, refuse_high]`; cannot be published without
-  an explicit override.
-- **unknown** — no baseline, no typical consumption, or no baseline date. The
-  first reading is accepted without a range.
+- **refuse** — outside `[refuse_low, refuse_high]`; cannot be published and is
+  rejected by HA before any provider or email send.
+- **unknown** — no baseline or no typical consumption. This is only for a first
+  reading; it is not a way to bypass a missing baseline date.
+- **config_error** — a baseline/typical configuration is present but the
+  baseline period or date is missing, invalid, in the future, or belongs to the
+  same period as the report. The page blocks the submission and asks the company
+  submitter to fix the configuration.
 - **rollover** — the index is below the baseline. The reporter must explicitly
   confirm a meter reset; the new index becomes the new baseline and the range is
   disabled until the next reading.
@@ -178,13 +197,29 @@ step but is then submitted and can become the baseline.
   "house_id": "house-a",
   "meter_id": "electricity-a",
   "period": "2026-10",
-  "index": 21870,
-  "previous_index": 21680,
+  "index": 1220,
+  "previous_index": 1000,
   "previous_at": "2026-09-21T09:00:00Z",
+  "previous_period": "2026-09",
   "delta": 190,
   "submitted_at": "2026-10-17T18:05:12Z",
   "submitted_by": "index_submitter",
   "range_state": "ok",
+  "range": {
+    "state": "ok",
+    "reason": null,
+    "mode": "absolute",
+    "months": 1,
+    "days": 30,
+    "typical": 200,
+    "expected_index": 1220,
+    "normal_low": 1170,
+    "normal_high": 1270,
+    "refuse_low": 1120,
+    "refuse_high": 1320,
+    "warn_delta": 50,
+    "refuse_delta": 100
+  },
   "photo": true,
   "late": false,
   "corrected": false,
@@ -234,7 +269,7 @@ the index submitter after a successful submission. It is data, not routing; HA
   "id": "01JABCDEF...",
   "meter_id": "electricity-a",
   "period": "2026-10",
-  "index": 21870,
+  "index": 1220,
   "submitted_by": "index_submitter",
   "submitted_at": "2026-10-17T18:05:12Z"
 }
@@ -254,11 +289,17 @@ the index submitter after a successful submission. It is data, not routing; HA
 }
 ```
 
-Allowed `state`: `proposed`, `approved`, `suppressed`, `blocked`, `forwarded`,
-`accepted`, `error`. The page shows it as a badge; it never gates the reading.
-`proposed` includes the index, `previous_index`, `previous_at`, `delta` and the
-global `gate` value (`on`/`off`). `input_boolean.publicare_companie` must be
-`on` before any final company submission.
+Allowed `state`: `proposed`, `suppressed`, `blocked`, `forwarded`, `accepted`,
+`error`, `reopened`, `invalidated`. The page shows it as a badge; it never gates
+the reading. `proposed` includes the index, `previous_index`, `previous_at`,
+`previous_period`, `delta`, `submission_id`, the range snapshot and the global
+`gate` value (`on`/`off`). `input_boolean.publicare_companie` must be `on`
+before any final company submission.
+
+`suppressed` is durable for the period, but the company submitter can send a
+`reopen` command. That writes `reopened` and allows a new proposal; it never
+resends on its own. `invalidated` is written when a bad reading is removed; the
+reading can be reported again after the admin fixes or replaces it.
 
 ## ntfy notification envelope
 
@@ -295,10 +336,11 @@ The admin page publishes a non-retained command only after a proposal:
 }
 ```
 
-`action` is `approve` or `suppress`. The HA automation re-checks
+`action` is `approve`, `suppress` or `reopen`. The HA automation re-checks
 `input_boolean.publicare_companie` and the company `citire_permisa` sensor before
 setting the company `number` and pressing the submit `button`. A suppress
-command only writes `state: suppressed`.
+command only writes `state: suppressed`; a reopen command only writes
+`state: reopened` and requires a fresh proposal and approval before any send.
 
 ## Photo
 

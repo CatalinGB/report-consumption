@@ -7,8 +7,10 @@
     "test": "node tests/anomaly.test.js && node tests/period.test.js && node tests/schema.test.js",
     "e2e": "node tests/e2e-browser.js",
     "e2e:multi": "node tests/e2e-multihouse.js",
+    "e2e:periods": "node tests/e2e-periods.js",
     "backup": "node tools/export-mqtt.js",
     "healthcheck": "node tools/healthcheck-bridge.js",
+    "healthcheck:state": "node tools/healthcheck-state.js",
     "ntfy:send": "node tools/ntfy-notify.js",
     "ntfy:listen": "node tools/ntfy-listener.js"
   },

@@ -140,7 +140,12 @@ Legend: **P0** = blocker, **P1** = needed before calling the system mature,
 
 ## P1 — code/spec gaps
 
-- [ ] Add a preflight anomaly/refusal check.
+- [x] Add a preflight anomaly/refusal check (app + HA reject `refuse`/`config_error`).
+- [x] Use period-based expectations for monthly meters and a correction/invalidation flow.
+- [x] Add a config audit (`revision`, `updated_by`, `last_change`) and range snapshots.
+- [x] Add `Redeschide` for a suppressed period and an admin invalidation action.
+- [x] Add `npm run healthcheck:state` to compare retained MQTT with HA sensors.
+- [ ] Set `baseline.period` for the live monthly meters and re-check the current period.
 - [ ] Add a first reminder at window open, not only the daily 10:00 run.
 - [ ] Add scheduled retention enforcement.
 - [ ] Commit importable dashboard/helper/discovery artifacts.

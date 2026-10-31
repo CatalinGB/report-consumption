@@ -60,15 +60,15 @@ const submission = schema.buildSubmission({
   installation: "casa",
   meter: { id: "electricity-b", house_id: "house-b" },
   period: "2026-10",
-  index: "4021",
-  previous: { index: 4020, at: "2026-09-21T09:00:00Z" },
+  index: "1001",
+  previous: { index: 1000, at: "2026-09-21T09:00:00Z" },
   submitted_by: "company_submitter",
   range_state: "ok"
 });
 assert.strictEqual(submission.meter_id, "electricity-b");
 assert.strictEqual(submission.house_id, "house-b");
-assert.strictEqual(submission.index, 4021);
-assert.strictEqual(submission.previous_index, 4020);
+assert.strictEqual(submission.index, 1001);
+assert.strictEqual(submission.previous_index, 1000);
 assert.strictEqual(submission.delta, 1);
 assert.strictEqual(submission.submitted_by, "company_submitter");
 assert.strictEqual(submission.range_state, "ok");

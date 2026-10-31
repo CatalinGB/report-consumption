@@ -381,6 +381,61 @@ The admin **Companie → Status companie** table shows a **Furnizor** column wit
 the provider's last transmitted index and timestamp. Verify the provider portal
 as the final source of truth; `forwarded` is not a confirmation.
 
+### Fix a baseline date or period
+
+A monthly meter uses the **period** of the previous reading, not the moment the
+previous submission was made. If a late or corrected reading was booked as the
+current month, the range becomes nonsense (for example, a full month of
+consumption compared over three days).
+
+1. Open **Configurare** and find the meter's **Perioada citirii de bază**.
+2. Set it to the period the baseline reading actually belongs to (usually the
+   previous month), for example `2026-09`.
+3. If the reading was also wrong, use **Raportare → Invalidează** on the bad
+   history row. This removes the reading, writes an `invalidated` status and
+   republishes `last` with `silent: true` so HA does not create a duplicate
+   proposal. The period can then be reported again.
+4. If the company status for the period is `suppressed`, use
+   **Companie → Status companie → Redeschide**. This writes `reopened`; it does
+   not send anything. A new proposal still needs a fresh reading and explicit
+   approval.
+5. Never widen `refuse_margin` to make a bad interval pass. If
+   `refuse_margin >= typical_month`, the admin page shows a configuration
+   warning because a full month of extra consumption would be accepted.
+
+`range_state: config_error` means the page could not calculate a trustworthy
+interval. The reading is blocked on purpose; fix the baseline before reporting.
+
+### Restore discovery and the private mapping after a broker loss
+
+If HA shows restored/unavailable `sensor.meters_config`,
+`sensor.submission_*` or `sensor.company_status_*`, the retained discovery
+payloads were lost. Republish the discovery config for each live entity (same
+`unique_id` as the entity registry) and then republish the retained config,
+`last/<meter>` and `status/<meter>/<period>` payloads from the broker. The
+`npm run healthcheck:state` check verifies the result.
+
+The company flow also needs the private `sensor.meter_operations` mapping. It is
+a YAML template sensor with `routes`, `company` and `sources` attributes; copy
+the private file into the HA configuration (for example a package) and reload
+template entities. Do not put that mapping in MQTT or Git.
+
+### Check MQTT and HA consistency
+
+The app writes retained `last/<meter>` pointers; HA mirrors them through
+`sensor.submission_<meter>`. If HA misses a retained message, the app can show a
+reading that the company flow never sees.
+
+```bash
+RC_HA_URL=http://homeassistant:8123 RC_HA_TOKEN=... npm run healthcheck:state
+```
+
+The check compares the retained config/`last` pointers with the HA discovery
+sensors and exits non-zero on a period, index or config mismatch. It also
+compares the company status index with the `last` index for the same period, so
+a provider-side correction that was not mirrored into the submission record is
+reported.
+
 ### Reset a meter and restart the flow
 
 The admin **Raportare → Reset raportare** action clears the known

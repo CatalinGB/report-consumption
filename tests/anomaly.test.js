@@ -171,4 +171,114 @@ r = anomaly.evaluate({
 assert.strictEqual(r.refuseDelta, 50);
 assert.strictEqual(r.state, "refuse");
 
+// Period-based monthly model: a normal monthly report is one typical month,
+// regardless of when it was submitted. This is the live October regression:
+// 1000 (September baseline) -> 1220 (October correction) is a normal month,
+// not a three-day spike.
+r = anomaly.evaluate({
+  index: 1220,
+  lastIndex: 1000,
+  period: "2026-10",
+  lastPeriod: "2026-09",
+  typicalMonth: 220,
+  warnDelta: 50,
+  refuseDelta: 100,
+  requireBaselinePeriod: true,
+  now: new Date("2026-10-26T14:10:22Z")
+});
+assert.strictEqual(r.state, "ok");
+assert.strictEqual(r.months, 1);
+assert.strictEqual(r.expectedIndex, 1220);
+assert.strictEqual(r.normalLow, 1170);
+assert.strictEqual(r.normalHigh, 1270);
+
+// The same reading evaluated over three days is exactly what the old code did.
+r = anomaly.evaluate({
+  index: 1220,
+  lastIndex: 1000,
+  lastAt: "2026-10-23T09:00:00Z",
+  typicalMonth: 220,
+  warnDelta: 50,
+  refuseDelta: 100,
+  now: new Date("2026-10-26T14:10:22Z")
+});
+assert.strictEqual(r.state, "refuse");
+assert.strictEqual(r.days, 3);
+
+// A baseline that belongs to the same period as the report is a configuration
+// error, not a three-day range.
+r = anomaly.evaluate({
+  index: 1220,
+  lastIndex: 1000,
+  period: "2026-10",
+  lastPeriod: "2026-10",
+  typicalMonth: 220,
+  warnDelta: 50,
+  refuseDelta: 100,
+  requireBaselinePeriod: true,
+  now: new Date("2026-10-26T14:10:22Z")
+});
+assert.strictEqual(r.state, "config_error");
+assert.strictEqual(r.reason, "period_order");
+assert.strictEqual(r.configError, true);
+
+// A zero-consumption reading over a full month is refused as too low.
+r = anomaly.evaluate({
+  index: 1000,
+  lastIndex: 1000,
+  period: "2026-10",
+  lastPeriod: "2026-09",
+  typicalMonth: 220,
+  warnDelta: 50,
+  refuseDelta: 100,
+  requireBaselinePeriod: true,
+  now: new Date("2026-10-23T10:16:23Z")
+});
+assert.strictEqual(r.state, "refuse");
+assert.strictEqual(r.reason, "low");
+
+// A missing baseline period with history is a configuration error in strict
+// monthly mode.
+r = anomaly.evaluate({
+  index: 1220,
+  lastIndex: 1000,
+  period: "2026-10",
+  typicalMonth: 220,
+  warnDelta: 50,
+  refuseDelta: 100,
+  requireBaselinePeriod: true,
+  now: new Date("2026-10-26T14:10:22Z")
+});
+assert.strictEqual(r.state, "config_error");
+assert.strictEqual(r.reason, "baseline_period_missing");
+
+// A baseline date in the future is invalid.
+r = anomaly.evaluate({
+  index: 1010,
+  lastIndex: 1000,
+  lastAt: "2026-10-18T12:00:00Z",
+  typicalMonth: 200,
+  warnDelta: 50,
+  refuseDelta: 100,
+  now: new Date("2026-10-17T12:00:00Z")
+});
+assert.strictEqual(r.state, "config_error");
+assert.strictEqual(r.reason, "baseline_date_future");
+
+// Skipped months are counted, not silently compressed.
+r = anomaly.evaluate({
+  index: 1400,
+  lastIndex: 1000,
+  period: "2026-10",
+  lastPeriod: "2026-08",
+  typicalMonth: 200,
+  warnDelta: 50,
+  refuseDelta: 100,
+  requireBaselinePeriod: true,
+  now: new Date("2026-10-17T12:00:00Z")
+});
+assert.strictEqual(r.months, 2);
+assert.strictEqual(r.expectedIndex, 1400);
+assert.strictEqual(r.state, "ok");
+
 console.log("anomaly tests: all passed");

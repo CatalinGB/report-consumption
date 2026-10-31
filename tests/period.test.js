@@ -80,4 +80,16 @@ const utcLate = new Date("2026-10-31T22:30:00Z");
 const zoned = period.state(null, utcLate, none, "Europe/Bucharest");
 assert.strictEqual(zoned.period, "2026-11");
 
+// Baseline period derivation: a reading after the close belongs to that
+// period; a reading before the close belongs to the previous one.
+const monthly45 = { open_day: 4, open_time: "09:00", close_day: 5, close_time: "23:59" };
+assert.strictEqual(period.periodForDate(monthly45, new Date("2026-10-23T09:00:00Z")), "2026-10");
+assert.strictEqual(period.periodForDate(monthly45, new Date("2026-10-01T09:00:00Z")), "2026-09");
+assert.strictEqual(period.periodForDate(monthly45, new Date("2026-09-23T09:00:00Z")), "2026-09");
+
+// Cross-month windows are anchored on the open date.
+assert.strictEqual(period.periodForDate(crossMonth, new Date("2026-10-01T09:00:00Z")), "2026-09");
+assert.strictEqual(period.periodForDate(crossMonth, new Date("2026-10-29T09:00:00Z")), "2026-10");
+assert.strictEqual(period.periodForDate(crossMonth, new Date("2026-11-02T09:00:00Z")), "2026-10");
+
 console.log("period tests: all passed");

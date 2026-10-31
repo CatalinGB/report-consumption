@@ -44,7 +44,7 @@ Legacy `reporter`/`admin` values are accepted during migration.
       "precision": 0,
       "visible": true,
       "reading_mode": "manual",
-      "baseline": { "index": 1000, "at": "2026-01-01" },
+      "baseline": { "index": 1000, "at": "2026-01-01", "period": "2025-12" },
       "typical_month": 200,
       "typical_by_month": null,
       "window": {
@@ -120,13 +120,29 @@ Keep the existing submission fields and use the new role values:
   "house_id": "house-a",
   "meter_id": "electricity-a",
   "period": "2026-10",
-  "index": 21870,
-  "previous_index": 21680,
+  "index": 1220,
+  "previous_index": 1000,
   "previous_at": "2026-09-21T09:00:00Z",
+  "previous_period": "2026-09",
   "delta": 190,
   "submitted_at": "2026-10-17T18:05:12Z",
   "submitted_by": "index_submitter",
   "range_state": "ok",
+  "range": {
+    "state": "ok",
+    "reason": null,
+    "mode": "absolute",
+    "months": 1,
+    "days": 30,
+    "typical": 200,
+    "expected_index": 1220,
+    "normal_low": 1170,
+    "normal_high": 1270,
+    "refuse_low": 1120,
+    "refuse_high": 1320,
+    "warn_delta": 50,
+    "refuse_delta": 100
+  },
   "photo": true,
   "late": false,
   "corrected": false,
@@ -137,6 +153,14 @@ Keep the existing submission fields and use the new role values:
 
 `submitted_by` is `index_submitter` or `company_submitter`. HA accepts legacy
 `reporter`/`admin` during migration.
+
+`baseline.period` and `previous_period` are optional `YYYY-MM` values. They are
+authoritative for the monthly expected range; `previous_at` is kept for display
+and for meters without a reporting window. `range` is an optional snapshot of
+the exact calculation shown to the submitter. If a monthly meter has a baseline
+index and a typical consumption but no usable baseline period/date, the reading
+is blocked with `range_state: config_error` instead of being accepted as
+`unknown`.
 
 ## Admin reset marker
 
@@ -181,7 +205,7 @@ Payload:
   "id": "01J...",
   "meter_id": "electricity-a",
   "period": "2026-10",
-  "index": 21870,
+  "index": 1220,
   "submitted_by": "index_submitter",
   "submitted_at": "2026-10-17T18:05:12Z"
 }

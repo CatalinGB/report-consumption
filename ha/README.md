@@ -203,9 +203,15 @@ browser build.
 - the status is not already `accepted`, `forwarded`, `suppressed` or `sending`
   for the same period;
 - it is not an `error` marked `uncertain`;
-- the last topic suffix, submission sensor period and index attribute agree.
+- the last topic suffix, submission sensor period, index and submission id
+  agree;
+- the payload is not a silent invalidation update (`silent: true`);
+- `range_state` is `ok`, `unknown` or `warn`. `refuse` and `config_error` never
+  create a proposal; a `config_error` sends an admin notification with the
+  reason so the baseline can be fixed.
 
-It never submits to the company and never notifies.
+It never submits to the company. It sends no notification for a normal
+proposal; the `new_index_notify` automation handles that.
 
 [`company_submit.yaml`](company_submit.yaml) consumes a non-retained
 `meters/casa/command/<meter>/<period>` command at QoS 1. Approval requires:
@@ -216,14 +222,19 @@ It never submits to the company and never notifies.
 - the global gate is on;
 - for provider mode, `citire_entity` says the company window is open;
 - for e-mail mode, the meter has a window and the current date **and time** is
-  inside that period's window; a proposal with `range_state: refuse` is
-  rejected; `ok`, `unknown` and `warn` are allowed only through the explicit
-  approve command.
+  inside that period's window;
+- `range_state` is not `refuse`, `config_error` or an unknown value. This check
+  runs before both provider and e-mail sends; `ok`, `unknown` and `warn` are
+  allowed only through the explicit approve command.
 
 Suppress is always safe and durable: it writes a retained `suppressed` status
 with `cancelled_at`. A later approve for the same period sees `suppressed` and
 stops. Suppress refuses to overwrite `accepted`/`forwarded`, so it cannot hide a
 send that already happened.
+
+`reopen` is a separate command for a suppressed or blocked period. It writes
+`reopened` and stops; it does not send, clear the provider state or bypass the
+gate. A new reading must create a fresh `proposed` status and a fresh approval.
 
 Provider mode sets the number, waits 2 seconds, presses the button and waits up
 to 45 seconds for `index_entity`. If `index_entity` is the same entity as

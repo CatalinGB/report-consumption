@@ -333,12 +333,14 @@ flowchart TD
   L -.->|"event failed, page ignores it"| X["Silent: no company notification"]
 ```
 
-**Happy path.** The page calculates the period from the window opening month, prorates expected
-consumption from the last accepted submission or baseline, and classifies the value as `ok`,
-`warn`, `refuse`, `rollover`, or `unknown`. A warning needs a checkbox; a rollover needs an
-explicit reset confirmation; a refusal cannot be published. The submission is retained per
-meter+period, then the `last` pointer is retained, then a non-retained `event/index` is published.
-HA's `new_index_notify` consumes the event.
+**Happy path.** The page calculates the period from the window opening month, derives expected
+consumption from the previous period's reading (or the configured baseline period), and classifies
+the value as `ok`, `warn`, `refuse`, `rollover`, `unknown`, or `config_error`. For a monthly meter,
+one reported period means one typical month regardless of when the reading was submitted; skipped
+periods are counted. A warning needs a checkbox; a rollover needs an explicit reset confirmation; a
+refusal cannot be published; a configuration error blocks the reading until the baseline is fixed.
+The submission is retained per meter+period (with a `range` snapshot), then the `last` pointer is
+retained, then a non-retained `event/index` is published. HA's `new_index_notify` consumes the event.
 
 **Failure and edge paths.**
 
@@ -353,7 +355,16 @@ HA's `new_index_notify` consumes the event.
 - **Rollover/reset.** A value below the baseline is treated as a meter reset, not normal
   consumption; it requires explicit confirmation and becomes the new baseline.
 - **Unknown range.** A first reading with no baseline or no typical consumption is accepted without
-  a range.
+  a range. A meter that already has a baseline and typical consumption but a missing or same-period
+  baseline date/period is **not** `unknown`; it is `config_error` and is blocked.
+- **Late or missed period.** When the current window is late and the previous period is also
+  unreported, the page offers a period selector and defaults to the earlier period. This prevents a
+  catch-up reading from being booked as the current month.
+- **Correction.** Re-reporting the same period replaces the reading and is evaluated against the
+  previous period, not against the reading being replaced.
+- **Invalidation and reopen.** The company submitter can invalidate a bad reading (admin only) or
+  reopen a suppressed/blocked period. Neither action sends to the company; a new proposal and a new
+  approval are still required.
 - **Photo.** The client resizes and caps the image. If the photo fails after the index is accepted,
   the reading is kept with `photo: false`; the reading must never be lost for the image.
 - **Correction without a new photo.** The page clears the old retained photo so a `photo: false`

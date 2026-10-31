@@ -21,6 +21,17 @@
     return isFinite(n) ? n : fallback;
   }
 
+  function isPeriod(value) {
+    return typeof value === "string" && /^\d{4}-\d{2}$/.test(value) &&
+      Number(value.slice(5, 7)) >= 1 && Number(value.slice(5, 7)) <= 12;
+  }
+
+  function isValidDate(value) {
+    if (!value) return false;
+    var d = new Date(value);
+    return !isNaN(d.getTime());
+  }
+
   function houses(config) {
     var list = config && Array.isArray(config.houses)
       ? config.houses.filter(function (house) { return house && typeof house === "object"; })
@@ -147,10 +158,12 @@
       index: Number(task.index),
       previous_index: previous ? Number(previous.index) : null,
       previous_at: previous ? previous.at : null,
+      previous_period: previous ? (previous.period || null) : null,
       delta: previous ? Number(task.index) - Number(previous.index) : null,
       submitted_at: task.submitted_at || new Date().toISOString(),
       submitted_by: task.submitted_by || "index_submitter",
       range_state: task.range_state || null,
+      range: task.range && typeof task.range === "object" ? task.range : null,
       photo: Boolean(task.photo),
       late: Boolean(task.late),
       corrected: Boolean(task.corrected),
@@ -243,6 +256,25 @@
           return "Factorul de consum al contorului " + m.id + " trebuie să fie pozitiv.";
         }
       }
+      if (m.typical_month !== null && m.typical_month !== undefined && m.typical_month !== "") {
+        var typical = Number(m.typical_month);
+        if (!isFinite(typical) || typical <= 0) {
+          return "Consumul tipic al contorului " + m.id + " trebuie să fie pozitiv sau gol.";
+        }
+      }
+      var baseline = m.baseline || {};
+      if (baseline.at && !isValidDate(baseline.at)) {
+        return "Data citirii de bază a contorului " + m.id + " este invalidă.";
+      }
+      if (baseline.period && !isPeriod(baseline.period)) {
+        return "Perioada citirii de bază a contorului " + m.id + " trebuie să fie YYYY-MM.";
+      }
+      var hasTypical = (m.typical_month !== null && m.typical_month !== undefined && m.typical_month !== "") ||
+        Boolean(m.typical_by_month);
+      if (baseline.index !== null && baseline.index !== undefined && baseline.index !== "" &&
+          hasTypical && m.window && !baseline.at && !baseline.period) {
+        return "Contorul " + m.id + " are index de bază și consum tipic, dar îi lipsește data sau perioada citirii de bază.";
+      }
       if (m.typical_by_month) {
         var months = Array.isArray(m.typical_by_month) ? m.typical_by_month.length : Object.keys(m.typical_by_month).length;
         if (months !== 12) return "Profilul lunar al contorului " + m.id + " trebuie să aibă 12 valori.";
@@ -258,9 +290,50 @@
         if (!(Number(thresholds.warn_pct) > 0) || !(Number(thresholds.refuse_pct) >= Number(thresholds.warn_pct))) {
           return "Procentele de avertizare/refuz ale contorului " + m.id + " sunt invalide.";
         }
+      } else {
+        var warnMargin = thresholds.warn_margin === null || thresholds.warn_margin === undefined || thresholds.warn_margin === ""
+          ? 50 : Number(thresholds.warn_margin);
+        var refuseMargin = thresholds.refuse_margin === null || thresholds.refuse_margin === undefined || thresholds.refuse_margin === ""
+          ? 100 : Number(thresholds.refuse_margin);
+        if (!isFinite(warnMargin) || warnMargin < 0 || !isFinite(refuseMargin) || refuseMargin < 0) {
+          return "Marjele contorului " + m.id + " trebuie să fie numere pozitive.";
+        }
+        if (refuseMargin < warnMargin) {
+          return "Marja de refuz a contorului " + m.id + " trebuie să fie cel puțin marja de avertizare.";
+        }
+      }
+      if (m.window) {
+        var openDay = Number(m.window.open_day);
+        var closeDay = Number(m.window.close_day);
+        if (!(openDay >= 1 && openDay <= 31) || !(closeDay >= 1 && closeDay <= 31)) {
+          return "Zilele ferestrei contorului " + m.id + " trebuie să fie 1–31.";
+        }
       }
     }
     return null;
+  }
+
+  /**
+   * Non-blocking configuration warnings shown to the company submitter.
+   * These do not prevent publishing, but they highlight ranges that are so
+   * wide that they cannot catch a real anomaly any more.
+   */
+  function warnings(config) {
+    var list = [];
+    allMeters(config).forEach(function (m) {
+      if (!m || !m.thresholds) return;
+      var typical = typicalIndexForMonth(m, null);
+      if (typical === null || typical <= 0) return;
+      if (m.thresholds.mode === "percent") return;
+      var warn = asNumber(m.thresholds.warn_margin, 50);
+      var refuse = asNumber(m.thresholds.refuse_margin, 100);
+      if (refuse >= typical) {
+        list.push("Contorul " + m.id + ": marja de refuz (" + refuse + ") este cel puțin consumul tipic (" + typical + "); o lună întreagă de consum suplimentar ar fi acceptată.");
+      } else if (warn > typical * 0.5) {
+        list.push("Contorul " + m.id + ": marja de avertizare (" + warn + ") este peste jumătate din consumul tipic (" + typical + ").");
+      }
+    });
+    return list;
   }
 
   return {
@@ -279,6 +352,8 @@
     typicalIndexForMonth: typicalIndexForMonth,
     buildSubmission: buildSubmission,
     normalize: normalize,
-    validate: validate
+    validate: validate,
+    warnings: warnings,
+    isPeriod: isPeriod
   };
 });

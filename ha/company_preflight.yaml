@@ -8,7 +8,10 @@ description: >-
   written only when the retained status is not already
   accepted/forwarded/suppressed/sending (or an uncertain error). Where possible
   it also verifies the last-topic meter id, the submission sensor period and
-  its index attribute before overwriting a proposal.
+  its index and submission id before overwriting a proposal. A payload with
+  `silent: true` updates the last pointer without creating a proposal (used by
+  reading invalidation). `refuse` and `config_error` ranges are never proposed;
+  `config_error` sends one admin diagnostic.
 mode: queued
 max: 10
 triggers:
@@ -44,7 +47,10 @@ actions:
       index: "{{ payload.index }}"
       previous_index: "{{ payload.previous_index if payload.previous_index is defined else none }}"
       previous_at: "{{ payload.previous_at if payload.previous_at is defined else none }}"
+      previous_period: "{{ payload.get('previous_period') if payload.previous_period is defined else none }}"
       delta: "{{ payload.delta if payload.delta is defined else none }}"
+      submission_id: "{{ payload.get('id') if payload.id is defined else none }}"
+      submission_range: "{{ payload.get('range') if payload.range is defined else none }}"
       submitted_by: "{{ payload.get('submitted_by', 'index_submitter') if payload.submitted_by is defined else 'index_submitter' }}"
       range_state: "{{ payload.get('range_state') if payload.range_state is defined else none }}"
       meters: "{{ (state_attr('sensor.meters_config', 'meters') or []) | select('mapping') | list }}"
@@ -71,34 +77,62 @@ actions:
       submission_sensor: "sensor.submission_{{ meter_id | string | replace('-', '_') }}"
       submission_period: "{{ states(submission_sensor) }}"
       submission_index: "{{ state_attr(submission_sensor, 'index') }}"
+      submission_sensor_id: "{{ state_attr(submission_sensor, 'id') }}"
       submission_ok: >-
         {{ submission_period == period }}
       submission_index_ok: >-
         {{ submission_index is not none and
            (submission_index | float(-1)) == (index | float(-2)) }}
+      submission_id_ok: >-
+        {{ submission_sensor_id is none or submission_id is none or
+           submission_sensor_id == submission_id }}
+      range_state_ok: >-
+        {{ range_state in [none, '', 'ok', 'unknown', 'warn'] }}
       gate: "{{ 'on' if is_state('input_boolean.publicare_companie', 'on') else 'off' }}"
       status_payload: >-
         {% set p = {'v': 1, 'meter_id': meter_id, 'period': period,
                     'house_id': house_id, 'state': 'proposed',
                     'index': index, 'previous_index': previous_index,
-                    'previous_at': previous_at, 'delta': delta,
+                    'previous_at': previous_at, 'previous_period': previous_period,
+                    'delta': delta, 'submission_id': submission_id,
                     'proposed_at': now().isoformat(), 'gate': gate,
                     'by': 'ha', 'submitted_by': submitted_by,
                     'submitted_at': payload.get('submitted_at')} %}
         {% if range_state is not none %}
           {% set p = p | combine({'range_state': range_state}) %}
         {% endif %}
+        {% if submission_range is not none %}
+          {% set p = p | combine({'range': submission_range}) %}
+        {% endif %}
         {{ p | tojson }}
+  - if:
+      - condition: template
+        value_template: >-
+          {{ range_state is not none and
+             range_state not in ['ok', 'unknown', 'warn'] }}
+    then:
+      - action: script.notify_admin
+        continue_on_error: true
+        data:
+          title: "Citire blocată — interval {{ meter_id }}"
+          message: >-
+            {{ period }}: indexul {{ index }} are range_state={{ range_state }}
+            ({{ (payload.get('range') or {}).get('reason', '') }}). Nu a fost creată
+            o propunere. Corectează citirea sau configurația contorului.
+      - stop: "range_state not allowed"
   - condition: template
     value_template: >-
-      {{ meter is mapping and
+      {{ not (trigger.payload_json.silent | default(false) | bool) and
+         (range_state_ok | bool) and
+         meter is mapping and
          meter.get('reading_mode', 'manual') != 'external' and
          meter.get('reporting', 'manual') not in ['smart', 'sensor'] and
          company_mode in ['approve', 'email'] and
          not (status_protected | bool) and
          not (status_uncertain_guard | bool) and
          (submission_ok | bool) and
-         (submission_index_ok | bool) }}
+         (submission_index_ok | bool) and
+         (submission_id_ok | bool) }}
   - action: mqtt.publish
     data:
       topic: "meters/casa/status/{{ meter_id }}/{{ period }}"
