@@ -434,7 +434,8 @@ The check compares the retained config/`last` pointers with the HA discovery
 sensors and exits non-zero on a period, index or config mismatch. It also
 compares the company status index with the `last` index for the same period, so
 a provider-side correction that was not mirrored into the submission record is
-reported.
+reported. It also fails when `sensor.meter_operations` is missing or has no
+`company` mapping.
 
 ### Reset a meter and restart the flow
 

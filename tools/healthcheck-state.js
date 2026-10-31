@@ -165,6 +165,11 @@ async function main() {
     }
   }
 
+  const ops = await haState("sensor.meter_operations");
+  if (!ops || ops.state === "unavailable" || !ops.attributes || !ops.attributes.company) {
+    problems.push("sensor.meter_operations is missing or has no company mapping");
+  }
+
   if (problems.length) {
     finish(1, "state healthcheck: FAIL\n- " + problems.join("\n- "));
   }
