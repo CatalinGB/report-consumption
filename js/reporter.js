@@ -194,10 +194,25 @@
     return null;
   }
 
+  function baselineFloor(meter) {
+    if (!meter || !meter.baseline) return null;
+    if (meter.baseline.period) return meter.baseline.period;
+    if (!meter.baseline.at) return null;
+    if (meter.baseline.index !== null && meter.baseline.index !== undefined && meter.baseline.index !== "") {
+      return RCPeriod.periodForDate(meter.window, meter.baseline.at);
+    }
+    // A start date without an index is the meter's first period, not a
+    // completed reading; do not walk back before it.
+    return RCPeriod.periodForDate(null, meter.baseline.at);
+  }
+
   function defaultPeriodState(meter) {
-    return RCPeriod.state(meter.window, new Date(), function (period) {
+    var state = RCPeriod.state(meter.window, new Date(), function (period) {
       return hasSubmission(meter.id, period);
     }, config && config.timezone);
+    var floor = baselineFloor(meter);
+    if (floor && state.period < floor) return periodStateForPeriod(meter, floor);
+    return state;
   }
 
   function periodStateForPeriod(meter, period) {
@@ -234,9 +249,10 @@
   function periodChoices(meter) {
     if (!meter.window) return [];
     var base = defaultPeriodState(meter);
+    var floor = baselineFloor(meter);
     var choices = [];
     var prev = previousPeriod(base.period);
-    if (prev) {
+    if (prev && (!floor || prev >= floor)) {
       var prevState = periodStateForPeriod(meter, prev);
       if (!prevState.upcoming && !prevState.reported) choices.push(prevState);
     }

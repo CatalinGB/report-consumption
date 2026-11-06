@@ -967,10 +967,23 @@
     };
   }
 
+  function baselineFloor(meter) {
+    if (!meter || !meter.baseline) return null;
+    if (meter.baseline.period) return meter.baseline.period;
+    if (!meter.baseline.at) return null;
+    if (meter.baseline.index !== null && meter.baseline.index !== undefined && meter.baseline.index !== "") {
+      return RCPeriod.periodForDate(meter.window, meter.baseline.at);
+    }
+    return RCPeriod.periodForDate(null, meter.baseline.at);
+  }
+
   function citireDefaultPeriod(meter) {
-    return RCPeriod.state(meter.window, new Date(), function (period) {
+    var state = RCPeriod.state(meter.window, new Date(), function (period) {
       return hasSubmission(meter.id, period);
     }, config && config.timezone);
+    var floor = baselineFloor(meter);
+    if (floor && state.period < floor) return periodStateForPeriod(meter, floor);
+    return state;
   }
 
   function previousPeriod(period) {
@@ -984,9 +997,10 @@
   function citirePeriodChoices(meter) {
     if (!meter.window) return [];
     var base = citireDefaultPeriod(meter);
+    var floor = baselineFloor(meter);
     var choices = [];
     var prev = previousPeriod(base.period);
-    if (prev) {
+    if (prev && (!floor || prev >= floor)) {
       var prevState = periodStateForPeriod(meter, prev);
       if (!prevState.upcoming && !prevState.reported) choices.push(prevState);
     }

@@ -175,10 +175,12 @@ async function main() {
   await publish(client, prefix + "/submission/" + METER + "/2026-09", "");
   await publish(client, prefix + "/submission/" + METER + "/2026-10", "");
   await publish(client, prefix + "/last/" + METER, "");
-  await publish(client, prefix + "/config", JSON.stringify(baseConfig(
+  const lateConfig = baseConfig(
     new Date(Date.now() + 2000).toISOString(),
     { index: 800, at: "2026-08-23T09:00:00Z", period: "2026-08" }
-  )));
+  );
+  lateConfig.meters[0].window = { type: "monthly", open_day: 20, open_time: "09:00", close_day: 21, close_time: "23:59" };
+  await publish(client, prefix + "/config", JSON.stringify(lateConfig));
   await new Promise((resolve) => setTimeout(resolve, 400));
 
   opened = await openReporter(browser);
@@ -189,6 +191,31 @@ async function main() {
   const options = await page.$$eval('[data-meter-id="' + METER + '"] .period-select option', (els) => els.map((el) => el.value));
   assert(options.includes("2026-09") && options.includes("2026-10"), "selector lists both periods: " + options.join(","));
   assert.deepStrictEqual(opened.errors, [], "reporter console errors (selector):\n" + opened.errors.join("\n"));
+
+  await opened.context.close();
+
+  // 4. A meter activated on 1 Oct with no index must not walk back to
+  // September just because September is also unreported.
+  await publish(client, prefix + "/submission/" + METER + "/2026-09", "");
+  await publish(client, prefix + "/submission/" + METER + "/2026-10", "");
+  await publish(client, prefix + "/last/" + METER, "");
+  const startConfig = baseConfig(
+    new Date(Date.now() + 3000).toISOString(),
+    { at: "2026-10-01T09:00:00Z" }
+  );
+  startConfig.meters[0].typical_month = 4;
+  startConfig.meters[0].window = { type: "monthly", open_day: 11, open_time: "09:00", close_day: 12, close_time: "23:59" };
+  await publish(client, prefix + "/config", JSON.stringify(startConfig));
+  await new Promise((resolve) => setTimeout(resolve, 400));
+
+  opened = await openReporter(browser);
+  page = opened.page;
+  const periodText = await page.textContent('[data-meter-id="' + METER + '"] .stat:nth-child(3) .stat__value');
+  assert(periodText.includes("octombrie"), "start date must floor the period at October: " + periodText);
+  assert(!periodText.includes("septembrie"), "period must not walk back before the start date: " + periodText);
+  assert.strictEqual(await page.$('[data-meter-id="' + METER + '"] .period-select'), null,
+    "no earlier period selector before the meter start date");
+  assert.deepStrictEqual(opened.errors, [], "reporter console errors (start floor):\n" + opened.errors.join("\n"));
 
   await opened.context.close();
   await browser.close();
