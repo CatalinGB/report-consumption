@@ -551,6 +551,8 @@ actions:
                   contract_address: "{{ contract_address }}"
                   cod_client: "{{ cod_client }}"
                   center: "{{ center }}"
+                  range_state: "{{ status_range_state if status_range_state is not none else '' }}"
+                  submission_id: "{{ status_submission_id if status_submission_id is not none else '' }}"
               - wait_template: "{{ is_state(status_entity, 'forwarded') }}"
                 timeout: "00:00:30"
                 continue_on_timeout: true

@@ -81,6 +81,16 @@ fields:
     default: ""
     selector:
       text:
+  range_state:
+    name: Range state
+    default: ""
+    selector:
+      text:
+  submission_id:
+    name: Submission id
+    default: ""
+    selector:
+      text:
 
 sequence:
   - action: notify.send_message
@@ -96,6 +106,7 @@ sequence:
         Titular contract: {{ contract_holder }}
         Adresă: {{ contract_address }}
         Cod client / abonat: {{ cod_client }}
+        Centru: {{ center if center not in [none, '', 'None'] else '—' }}
         Contor: {{ meter_name }}
         Index vechi: {{ previous_index if previous_index not in [none, '', 'None'] else '—' }} {{ unit }}
         Index nou: {{ index }} {{ unit }}
@@ -116,6 +127,8 @@ sequence:
             'state': 'forwarded', 'index': index | float(0),
             'previous_index': (previous_index | float(0)) if previous_index not in [none, '', 'None'] else none,
             'delta': (delta | float(0)) if delta not in [none, '', 'None'] else none,
+            'range_state': range_state if range_state not in [none, '', 'None'] else none,
+            'submission_id': submission_id if submission_id not in [none, '', 'None'] else none,
             'by': 'company_submitter', 'gate': 'on',
             'updated_at': now().isoformat(),
             'detail': 'SMTP accepted the message; no delivery confirmation'} | tojson }}
