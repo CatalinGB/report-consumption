@@ -160,8 +160,8 @@ publishing a test submission for the period, a second run showed `due=false` for
 both meters and made no notification call. The test submission and sensor state
 were cleared, and the production seed was restored.
 
-The HA test used the owner's Pushover account/device and the local ntfy listener.
-The mother's phone is not onboarded yet.
+The HA test used the owner's Pushover account/device and a direct HTTPS post to
+the ntfy topic. The mother's phone is not onboarded yet.
 
 **Still missing:** the mother’s ntfy subscription and the one real reporting
 cycle. The Flespi ↔ home Mosquitto bridge is now connected.

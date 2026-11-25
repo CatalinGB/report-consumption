@@ -44,6 +44,8 @@ Import or include these in order:
 7. The automations: [`meter_reminders.yaml`](meter_reminders.yaml),
    [`close_alert.yaml`](close_alert.yaml),
    [`new_index_notify.yaml`](new_index_notify.yaml),
+   [`meter_status_mirror.yaml`](meter_status_mirror.yaml),
+   [`meter_status_clear.yaml`](meter_status_clear.yaml),
    [`company_preflight.yaml`](company_preflight.yaml),
    [`company_submit.yaml`](company_submit.yaml),
    [`water_sent_watcher.yaml`](water_sent_watcher.yaml).
@@ -118,10 +120,10 @@ Publish the retained discovery payloads under
 | `submission_water_c.json` | `sensor.submission_water_c` | `meters/casa/last/water-c` |
 | `submission_electricity_b.json` | `sensor.submission_electricity_b` | `meters/casa/last/electricity-b` |
 | `submission_gas_a.json` | `sensor.submission_gas_a` | `meters/casa/last/gas-a` |
-| `company_status_electricity_a.json` | `sensor.company_status_electricity_a` | `meters/casa/status/electricity-a/+` |
-| `company_status_electricity_b.json` | `sensor.company_status_electricity_b` | `meters/casa/status/electricity-b/+` |
-| `company_status_gas_a.json` | `sensor.company_status_gas_a` | `meters/casa/status/gas-a/+` |
-| `company_status_water_c.json` | `sensor.company_status_water_c` | `meters/casa/status/water-c/+` |
+| `company_status_electricity_a.json` | `sensor.company_status_electricity_a` | `meters/casa/status/electricity-a/current` |
+| `company_status_electricity_b.json` | `sensor.company_status_electricity_b` | `meters/casa/status/electricity-b/current` |
+| `company_status_gas_a.json` | `sensor.company_status_gas_a` | `meters/casa/status/gas-a/current` |
+| `company_status_water_c.json` | `sensor.company_status_water_c` | `meters/casa/status/water-c/current` |
 
 The company status entity is required for a meter in `company` mode
 `approve`/`email`: the submit automation verifies the retained proposal through
@@ -133,6 +135,34 @@ as known and a reminder may fire for the open window. If the sensor is missing,
 `unknown` or `unavailable`, HA treats the meter as **unknown**, not as
 unreported, and sends no reminder.
 
+### Current status topic (required)
+
+`meters/casa/status/<meter>/<period>` remains the full per-period history. HA
+also mirrors the newest status to the retained
+`meters/casa/status/<meter>/current` topic. The `company_status_<meter>`
+discovery entity reads **only** `current`.
+
+This matters because retained per-period topics are replayed in arbitrary order
+after a restart. With the old `status/<meter>/+` wildcard, an old `proposed`
+period could overwrite a newer `accepted` one and make a reported meter look
+unreported. [`meter_status_mirror.yaml`](meter_status_mirror.yaml) publishes
+`current` only when the incoming period (or, for the same period, its
+`updated_at`) is newer. It stores its high-water mark in
+`input_text.meters_status_seen` (a UI text helper, max 255, no `initial`).
+
+Create that helper once in **Settings → Devices & services → Helpers → Create
+helper → Text**, name **Meters status seen**, max length **255**. Do not add an
+`initial` value: HA must restore the last seen map across restarts.
+
+[`meter_status_clear.yaml`](meter_status_clear.yaml) handles the opposite
+direction: when the app publishes an empty retained payload for a period (reset
+or invalidation), it clears `current` and removes the meter from the helper. A
+reset meter must not keep an old accepted status and suppress reminders.
+
+When adding a meter, publish the discovery file, create the current topic once
+with a retained payload (or let the mirror do it on the next status write), and
+keep the helper.
+
 ## 4. Reminders and close alert
 
 [`meter_reminders.yaml`](meter_reminders.yaml) runs at **10:00**:
@@ -141,19 +171,28 @@ unreported, and sends no reminder.
 2. Skips `reading_mode: external` meters.
 3. Calculates the current or previous window, including cross-month windows and
    exact open/close times.
-4. Reads `sensor.submission_<meter>`; only a known, different period is due.
+4. Reads `sensor.submission_<meter>` **and** `sensor.company_status_<meter>`.
+   A meter is reported when the submission period matches the window period, or
+   when the current company status matches it with a positive state
+   (`proposed`, `sending`, `forwarded`, `accepted`, `suppressed`, `blocked` or
+   `error`). A `reopened` or `invalidated` status does not count.
 5. Routes `index_submitter` to `script.notify_index_submitter` (generic ntfy) and
    `company_submitter` to `script.notify_admin` (Pushover to `kalioPhone`).
 
 The index-submitter reminder carries the bare reporter page with the action
-label **Open index reporting page**. The admin reminder uses Pushover and may
+label **Deschide pagina de raportare**. The admin reminder uses Pushover and may
 contain operational detail. A `continue_on_error` on each notification means one
 dead device cannot abort the remaining meters; a malformed meter is skipped by
 the per-item guards.
 
+The same rules are written for the end user in
+[`docs/end-user-guide.md`](../docs/end-user-guide.md) and are rendered as the
+final Markdown card of the `kalio-contoare/contoare` dashboard.
+
 [`close_alert.yaml`](close_alert.yaml) runs at **10:05**, skips external meters,
 and alerts the company submitter only when a window closed in the last 24 hours
-and the meter is still unreported. Unknown submission sensors are ignored.
+and the meter is still unreported. It applies the same submission-or-positive-
+status rule and ignores unknown submission sensors.
 
 ## 5. Notifications
 
@@ -167,13 +206,14 @@ submitter. `script.notify_admin` sends operational detail to Pushover on
 
 ```text
 script.notify_index_submitter -> script.ntfy_notify
-  -> meters/casa/status/ntfy -> local listener -> ntfy.sh
+  -> rest_command.ntfy_publish -> https://ntfy.sh/<topic>
 ```
 
-The ntfy topic stays on the listener host; it is not in HA or Git. The envelope
-includes `action_label`, mapped to a native ntfy action button. The
-index-submitter message is generic and carries only the bare reporter link with
-the **Open index reporting page** action.
+No MQTT hop and no listener process. The publish URL (including the topic) is
+the HA secret `ntfy_url`; it is not in this repository, in MQTT or in a message.
+The `actions` entry carries the **Deschide pagina de raportare** button. The
+index-submitter message is generic and carries only the bare reporter link.
+See [`rest_command-ntfy.example.yaml`](rest_command-ntfy.example.yaml).
 
 Pushover is the admin channel and may contain meter/index/period/status detail,
 but never a physical or contract address. If Pushover fails, `notify_admin`
@@ -200,6 +240,9 @@ browser build.
 `meters/casa/last/+` pointer (no short freshness gate, so offline-queued submissions are still processed). It writes a retained `proposed` status only when:
 
 - `company.<meter>.mode` is `approve` or `email`;
+- the submitted period belongs to the meter's **current** reporting window; a
+  stale `last` pointer from an older period is ignored instead of being
+  re-proposed after every restart;
 - the status is not already `accepted`, `forwarded`, `suppressed` or `sending`
   for the same period;
 - it is not an `error` marked `uncertain`;
@@ -264,9 +307,29 @@ notifies only; it never sets a provider entity or publishes a submission. It
 ignores unknown/unavailable values and reports the first real value as
 "prima valoare".
 
-## 9. Recovery and testing
+## 9. Admin dashboard
 
-There is no `script.publish_meter_discovery` in this package. Republish the
+The storage-mode dashboard `kalio-contoare/contoare` is the operational view:
+one control section (what to do now, the global gate, config revision, bridge
+heartbeat, quick links), one section per meter (submission, company status,
+provider index, window, range, responsibility, approve/suppress/reopen), a
+system section (automations and last runs, current-status diagnostic) and the
+full end-user guide as the final Markdown card. The meter sections are static:
+when you add a meter, add its section (or ask an agent to regenerate it from the
+config). The reminder and discovery entities are dynamic.
+
+The guide text is kept in [`docs/end-user-guide.md`](../docs/end-user-guide.md).
+Approval and suppression are long-press buttons; reopen is a tap and is only
+shown for `suppressed`/`blocked`. The page never sends anything by itself.
+
+The live deployment also has a private `script.publish_meter_discovery` with the
+real entity IDs; it is intentionally not part of this public package. The
+dashboard's **Republică discovery** button calls that script.
+
+## 10. Recovery and testing
+
+There is no `script.publish_meter_discovery` in this package. The live
+deployment has a private one with real entity IDs (see section 9); republish the
 retained discovery payloads from `ha/discovery/` after a broker loss, for
 example with MQTT Explorer or:
 
@@ -287,7 +350,7 @@ an `event/index` event to exercise `new_index_notify`. Test the company path
 only with the global gate off first, then with a test meter whose provider
 mapping is known. Never send a placeholder message to a real provider.
 
-## 10. What is deliberately not here
+## 11. What is deliberately not here
 
 - A live deployment/migration of the retained schema-2 config and the private mapping.
 - Unattended submission without an explicit approve command and the gate.

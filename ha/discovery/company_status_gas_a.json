@@ -2,8 +2,8 @@
   "name": "Company status gas-a",
   "object_id": "company_status_gas_a",
   "unique_id": "meters_company_status_demo_gas_a",
-  "state_topic": "meters/casa/status/gas-a/+",
+  "state_topic": "meters/casa/status/gas-a/current",
   "value_template": "{{ value_json.state }}",
-  "json_attributes_topic": "meters/casa/status/gas-a/+",
+  "json_attributes_topic": "meters/casa/status/gas-a/current",
   "icon": "mdi:send-check"
 }

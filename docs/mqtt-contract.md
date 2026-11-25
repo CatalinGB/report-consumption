@@ -29,8 +29,8 @@ truth; Home Assistant is never required at runtime.
 | `meters/<installation>/submission/<meter_id>/<period>` | yes | 1 | reporter | admin, HA | One reading per meter per period. A correction overwrites the same topic. |
 | `meters/<installation>/last/<meter_id>` | yes | 1 | reporter/admin | admin, HA | Retained pointer to the latest accepted submission for that meter. A `period: "reset"` marker means the meter has no current submission; HA treats it as known but not a real period. |
 | `meters/<installation>/photo/<meter_id>/<period>` | yes | 1 | reporter | admin, HA | Optional photo, pure base64 (HA MQTT image entity). |
-| `meters/<installation>/status/<meter_id>/<period>` | yes | 1 | HA | reporter, admin | Company state: proposed / approved / suppressed / blocked / forwarded / accepted / error. |
-| `meters/<installation>/status/ntfy` | no | 1 | HA | local ntfy listener | Non-retained notification envelope; no topic or secret in the payload. |
+| `meters/<installation>/status/<meter_id>/<period>` | yes | 1 | HA | reporter, admin | Company state: proposed / sending / suppressed / blocked / forwarded / accepted / error. |
+| `meters/<installation>/status/<meter_id>/current` | yes | 1 | HA | HA (the app ignores `current`) | Newest company state for the meter, copied from the newest `<period>` status by `meter_status_mirror`. The `company_status_<meter>` discovery entity reads only this topic, so retained period replays cannot regress it. |
 | `meters/<installation>/event/index` | no | 1 | reporter | HA | Non-retained new-index event for HA notification routing. |
 | `meters/<installation>/command/<meter_id>/<period>` | no | 1 | admin | HA | Explicit approve/suppress command; never retained so a replay cannot double-submit. |
 | `meters/<installation>/client/status` | yes | 1 | reporter | admin | Last seen, page version, connection state. Optional. |
@@ -289,7 +289,7 @@ the index submitter after a successful submission. It is data, not routing; HA
 }
 ```
 
-Allowed `state`: `proposed`, `suppressed`, `blocked`, `forwarded`, `accepted`,
+Allowed `state`: `proposed`, `sending`, `suppressed`, `blocked`, `forwarded`, `accepted`,
 `error`, `reopened`, `invalidated`. The page shows it as a badge; it never gates
 the reading. `proposed` includes the index, `previous_index`, `previous_at`,
 `previous_period`, `delta`, `submission_id`, the range snapshot and the global
@@ -301,27 +301,26 @@ before any final company submission.
 resends on its own. `invalidated` is written when a bad reading is removed; the
 reading can be reported again after the admin fixes or replaces it.
 
-## ntfy notification envelope
+### Current status pointer
 
-`status/ntfy` is a non-retained, QoS 1 envelope. HA publishes it; the local
-listener reads it and forwards it to the local ntfy topic. The ntfy topic itself
-is deliberately not part of this contract or the HA config.
+The per-period status topics are retained for history. A wildcard discovery
+sensor cannot safely read them because a restart replays them in arbitrary
+order, and an older `proposed` period can land after a newer `accepted` one.
+HA therefore mirrors the newest payload to
+`meters/<installation>/status/<meter_id>/current` (retained) and the discovery
+entity reads that single topic. The mirror compares `period` and `updated_at`;
+it never replaces `current` with an older period. `current` is an HA-owned
+convenience topic, not a new writer contract: the app continues to publish
+per-period statuses only. When the app clears a period (reset or invalidation),
+a companion automation clears `current` too, so an old `accepted` status cannot
+survive a reset.
 
-```json
-{
-  "v": 1,
-  "title": "Report consumption",
-  "message": "A meter is ready",
-  "priority": "high",
-  "tags": "bell",
-  "url": "https://example.invalid/",
-  "at": "2026-10-20T18:00:00+03:00"
-}
-```
+## ntfy notifications
 
-`priority` accepts `min`, `low`, `default`, `high`, `max` or `1`–`5`. The
-listener ignores malformed or stale retained envelopes; a non-retained envelope
-is intentionally not replayed when the listener is offline.
+ntfy notifications are **not** part of this MQTT contract. HA posts them
+directly over HTTPS through `rest_command.ntfy_publish`; the topic lives only
+in the HA `secrets.yaml` and `.env.ntfy`. See
+[`notifications.md`](notifications.md).
 
 ## Company command payload
 
@@ -364,11 +363,18 @@ HA subscribes to `meters/<installation>/#` and:
 3. Reads the private HA `sensor.meter_operations` mapping for routes, provider
    entities, SMTP and contract data. Those values are never in MQTT.
 4. Sends reminders while a window is open and no submission exists — never for
-   a meter already reported. Routing is HA-owned.
+   a meter already reported. A positive company status for the period
+   (`proposed`, `sending`, `forwarded`, `accepted`, `suppressed`, `blocked`,
+   `error`) also counts as reported, because it proves an index reached the
+   company even if the `last` pointer is stale. `reopened` and `invalidated` do
+   not count.
 5. Notifies the company submitter on `event/index` (new-index notification).
 6. Maps `meter_id` to provider entities in HA, then writes
-   `status/<meter_id>/<period>`.
-7. Writes nothing to config; config is admin-only.
+   `status/<meter_id>/<period>` and mirrors the newest one to
+   `status/<meter_id>/current`.
+7. Clears `status/<meter_id>/current` when the app deletes the matching
+   per-period status (reset or invalidation).
+8. Writes nothing to config; config is admin-only.
 
 ## Open points
 

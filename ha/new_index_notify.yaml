@@ -50,6 +50,3 @@ actions:
         pentru perioada {{ period }}. Trimis de {{ role_label }}.
         Deschide administrarea pentru a verifica propunerea și a aproba sau
         suprima trimiterea către companie.
-      data:
-        url: "https://YOUR_GITHUB_USER.github.io/report-consumption/admin.html"
-        url_title: "Open administration"

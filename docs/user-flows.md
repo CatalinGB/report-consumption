@@ -166,7 +166,7 @@ flowchart LR
   end
 
   subgraph EXT["External and irreversible"]
-    NTFY["ntfy listener and ntfy.sh<br/>index submitter, generic only"]
+    NTFY["ntfy over HTTPS<br/>index submitter, generic only"]
     PUSH["Pushover to kalioPhone<br/>admin detail, no address"]
     PROV["Provider number and button"]
     MAIL["CATD SMTP"]
@@ -505,7 +505,7 @@ flowchart TD
 **Happy path.** At 10:00 HA reads the retained config and the private routes. It skips
 `reading_mode: external` meters and meters with no window. It reads the last-submission sensor;
 only a known, different period is due. A meter routed to `index_submitter` calls
-`script.notify_index_submitter` (generic ntfy with **Open index reporting page**). A meter routed
+`script.notify_index_submitter` (generic ntfy with **Deschide pagina de raportare**). A meter routed
 to `company_submitter` calls `script.notify_admin` (Pushover to `kalioPhone`, operational detail
 allowed, no address). At 10:05 the close alert sends one company-submitter Pushover message if a
 window closed in the last 24 hours and the meter is still unreported. A late submission still counts and stops
@@ -526,8 +526,9 @@ reminders.
   skips that day entirely. The close alert only looks back 24 hours.
 - **ntfy failure.** `continue_on_error` lets the loop continue, but the index submitter may miss
   the reminder. The company submitter is not told that the mother's ntfy delivery failed.
-- **ntfy listener down.** The index-submitter envelope is non-retained and is lost; the admin
-  Pushover path is independent. There is no retry.
+- **ntfy listener down.** Removed: HA posts directly to ntfy over HTTPS, so there is no listener
+  to be down. An unreachable ntfy or an HTTP error still means the index submitter missed that
+  day's reminder; the admin Pushover path is independent and there is no retry.
 - **Admin Pushover fails.** `notify_admin` raises; callers in the loop may use `continue_on_error`,
   so the loop continues without a delivery guarantee. The HA trace is the only evidence.
 - **Timezone.** Window math uses HA's local time. If HA is not on `Europe/Bucharest`, open/close
@@ -545,7 +546,7 @@ identifier. The company-submitter Pushover path may contain operational detail, 
 address, token, or installation id. Both paths use bare URLs; `notify_admin`, `ntfy_notify` and
 `tools/ntfy.js` enforce the link shape.
 
-**Recovery and audit `[AUDIT]`.** HA automation trace, ntfy listener log, Pushover delivery,
+**Recovery and audit `[AUDIT]`.** HA automation trace, ntfy POST result in the HA log, Pushover delivery,
 bridge heartbeat, and `npm run healthcheck`. Run the reminder automation manually while a window
 is open to test. Add a startup catch-up and an "unknown sensor" health alert.
 
@@ -624,7 +625,7 @@ period) but no address. The owner opens the admin page and sees the proposal.
 contain the house name, meter name, index, period, contract/client code, token, installation id, or
 any identifier. The URL must be the bare admin page. The event itself may carry the data; HA must
 not forward it to ntfy. `notify_index_submitter` uses only generic text; `notify_admin` sends admin
-detail to Pushover and never to `status/ntfy`. The ntfy envelope remains generic.
+detail to Pushover and never to ntfy. The ntfy message remains generic.
 
 **Recovery and audit `[AUDIT]`.** HA automation trace, MQTT broker log, and the retained
 `proposed` status. A better design is to notify on the retained `proposed` transition, not on the
@@ -1046,7 +1047,7 @@ flowchart TD
   B -->|"home bridge"| F["Run rotate-home script<br/>copy bridge config and restart"]
   F --> G["Check heartbeat and bridge logs"]
   G -.->|"wrong token"| G1["No HA to Flespi path<br/>healthcheck alerts"]
-  B -->|"ntfy topic"| H["Generate new topic<br/>update env, restart listener, resubscribe"]
+  B -->|"ntfy topic"| H["Generate new topic<br/>update env + HA secret, resubscribe"]
   A --> I["Backup export, mode 600"]
   I --> J{"Restore tested?"}
   J -->|"no"| J1["Do not delete retained topics<br/>no recovery guarantee"]
@@ -1057,8 +1058,8 @@ flowchart TD
 then delete the old one. The reporter token includes publish rights for submissions, last, photos,
 and `event/index`. The home bridge token is rotated with the script, the bridge config is copied to
 the broker host, Mosquitto restarts, and the heartbeat is checked. The ntfy topic is rotated by
-generating a new UUID, updating the local env file, restarting the listener, and resubscribing the
-phone. Backups are mode 600 JSON exports under a gitignored directory.
+generating a new UUID, updating the local env file and the HA `ntfy_url` secret, and resubscribing
+the phone. Backups are mode 600 JSON exports under a gitignored directory.
 
 **Failure and edge paths.**
 
@@ -1070,7 +1071,7 @@ phone. Backups are mode 600 JSON exports under a gitignored directory.
   local status, but the Flespi path for notifications and remote visibility breaks. The heartbeat
   healthcheck is the detector.
 - **ntfy topic rotated without resubscribing.** The phone is subscribed to the old topic and
-  receives nothing. The listener logs success for the new topic; the user sees silence.
+  receives nothing. HA logs a successful POST to the new topic; the user sees silence.
 - **Backup contains PII.** The export includes config, submissions, last pointers, status, and
   photos. Schema 3 no longer defines a house address, but a backup taken before the retained config
   is republished can still contain the legacy field. Photos may show an address. Mode 600 is not
@@ -1107,8 +1108,8 @@ Git; it must be done on the real broker/HA. `Decision` = the owner must choose.
 | ID | Gate: what must be true | Coded today | Live migration only | Product decision |
 |---|---|---|---|---|
 | G1 | No physical/house address in MQTT or the app; CATD address only in private HA data | **Yes (code)** — schema 3 normalization deletes `houses[].address`; seed, seed-local, admin/reporter UI, glossary, and schema examples do not define it; the live retained config was cleaned | Yes — republish schema 3 so legacy fields are also gone | Resolved — no field remains |
-| G2 | No PII in ntfy; Pushover admin detail allowed but never an address; no house/meter/index/period/contract/client/token/installation in ntfy or the `status/ntfy` envelope | **Yes (split wrappers)** — `notify_index_submitter` is generic ntfy; `notify_admin` is Pushover to `kalioPhone`; no admin path uses ntfy | Live wrappers imported; capture one ntfy envelope and one Pushover body | Resolved in source; full envelope evidence pending |
-| G3 | Notification URLs are bare: no query, no fragment, no identifier | **Yes (source and listener)** — `notify_admin` and `ntfy_notify` stop on `?`/`#`; `tools/ntfy.js` throws; current call sites use bare URLs | Live scripts imported; invalid-URL path observed; add a repeatable negative test | Resolved in source; test evidence pending |
+| G2 | No PII in ntfy; Pushover admin detail allowed but never an address; no house/meter/index/period/contract/client/token/installation in ntfy or the ntfy request | **Yes (split wrappers)** — `notify_index_submitter` is generic ntfy; `notify_admin` is Pushover to `kalioPhone`; no admin path uses ntfy | Live wrappers imported; capture one ntfy request and one Pushover body | Resolved in source; full envelope evidence pending |
+| G3 | Notification URLs are bare: no query, no fragment, no identifier | **Yes (source and transport)** — `notify_admin` and `ntfy_notify` stop on `?`/`#`; `tools/ntfy.js` throws; current call sites use bare URLs | Live scripts imported; invalid-URL path observed; add a repeatable negative test | Resolved in source; test evidence pending |
 | G4 | Invite token is fragment-only; URL is stripped; query tokens rejected | **Yes (token)** — `parseParams` reads `token` only from the fragment; a query token is ignored, the setup screen is shown, and the query is stripped; invite generator uses the fragment | One live invite + query-token check | Resolved in source; live check pending |
 | G5 | New-index notification is reliable and deduplicated | **Partial** — event exists; no retry, no dedupe, event failure is ignored | — | Yes — event vs proposal trigger |
 | G6 | Approval command has an HA acknowledgement or a visible timeout | **No** — page sees PUBACK, not HA action | — | Yes — ack design or move to HA |
@@ -1138,9 +1139,9 @@ order:
    schema-3 config and keep a dump showing no address and no legacy orchestration fields.
 2. **G2 / C2 (live evidence)** — import `notify_index_submitter` (ntfy) and `notify_admin`
    (Pushover). Capture the mother reminder as generic ntfy and the admin new-index/close/water/
-   company alerts as detailed Pushover; confirm no identifier in the `status/ntfy` payload and no
+   company alerts as detailed Pushover; confirm no identifier in the ntfy request body and no
    address in Pushover.
-3. **G3 / G4 / C3 (live evidence + negative test)** — import the listener/scripts, prove a
+3. **G3 / G4 / C3 (live evidence + negative test)** — import the scripts, prove a
    `?`/`#` URL is refused, and prove a query-string invite token does not log in.
 4. **G5 / C4** — make the new-index notification reliable or replace it with a proposal-based
    trigger.
@@ -1159,7 +1160,7 @@ normalizer is ready and the live address field was removed.
 
 | Failure class | Concrete path | Consequence | Current guard | Gap |
 |---|---|---|---|---|
-| **PII leak in ntfy** | Index-submitter reminder → `notify_index_submitter` → `ntfy_notify` → `status/ntfy` MQTT → listener → ntfy | House/meter/index/period exposed on the mother's lock screen and to MQTT subscribers | `notify_index_submitter` sends fixed generic text; URL guards reject `?`/`#` | Source and live title/URL checks; full message envelope pending |
+| **PII leak in ntfy** | Index-submitter reminder → `notify_index_submitter` → `ntfy_notify` → HTTPS → ntfy | House/meter/index/period exposed on the mother's lock screen | `notify_index_submitter` sends fixed generic text; URL guards reject `?`/`#` | Source and live title/URL checks; full message envelope pending |
 | **PII at rest** | Old schema-2 backups or photos may still contain an address; the live retained config was cleaned | Address can persist in MQTT, backups, and replicas until the live config is stripped | Schema 3 normalizer deletes the field; seed/UI/glossary/docs no longer define it; backups are gitignored and mode 600 | Republish the retained config; encrypt/offsite backups; photo guidance |
 | **Submit twice** | Queue retry republishes `event/index`; CATD status lost/stuck; manual re-approve after uncertain; two tabs | Duplicate notification or duplicate provider/email send | Retained status guards, command queue, uncertain error | Event-id dedupe; send ledger independent of status; ack |
 | **Wrong index** | Two devices last-writer-wins; stale queued reading overwrites a correction; old cached proposal | Provider gets an older or wrong reading | HA re-checks proposal index/period | Queue conflict policy; force refresh before approve |
@@ -1327,7 +1328,7 @@ product decision). None of the conditions below is satisfied by saying "it is in
 |---|---|---|---|
 | C1 | Remove `houses[].address` from schema 3, the admin UI, the seed, and the retained config; CATD address lives only in private HA data | **Code closed; live address verified** — schema normalizer deletes it; seed/UI/docs do not define it; the live retained config was checked and is address-free but still schema 2 | Schema-3 migration dump; no address already verified |
 | C2 | No PII in ntfy; admin Pushover may contain operational detail but never an address; both use bare URLs | **Code closed; evidence pending** — split wrappers; ntfy generic, admin Pushover detailed | Captured ntfy envelope and admin Pushover body; negative test that ntfy has no detail |
-| C3 | Enforce bare URLs at the source and in the listener; reject query strings and fragments; reject query-string invite tokens | **Code closed; evidence pending** — wrapper and listener reject `?`/`#`; token is fragment-only | Negative tests and live import of the updated scripts |
+| C3 | Enforce bare URLs at the source and in the transport; reject query strings and fragments; reject query-string invite tokens | **Code closed; evidence pending** — the wrapper and CLI reject `?`/`#`; token is fragment-only | Negative tests and live import of the updated scripts |
 | C4 | Make the new-index notification reliable and deduplicated, or replace it with a retained-proposal notification | **Open** — non-retained event, no retry, no dedupe, page ignores failure | HA trace with HA offline/online and a duplicate-event test |
 | C5 | Add an approval acknowledgement/timeout in the admin UI, or move approve/suppress to HA | **Open** — page sees PUBACK only | UI evidence: "acknowledged" vs "not acknowledged" |
 | C6 | Make provider outcomes honest: `accepted` only with confirmation; a distinct unconfirmed state; no stuck `sending` on action error | **Open** — timeout is `forwarded`; action errors leave `sending` | Provider test, timeout test, HA restart test |

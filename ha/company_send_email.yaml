@@ -139,9 +139,6 @@ sequence:
       message: >-
         {{ period }}: indexul {{ index }} {{ unit }} a fost trimis prin SMTP
         către centrul {{ center or '—' }}. Verifică răspunsul CATD.
-      data:
-        url: "https://YOUR_GITHUB_USER.github.io/report-consumption/admin.html"
-        url_title: "Open administration"
 
 mode: queued
 max: 5

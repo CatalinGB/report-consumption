@@ -2,8 +2,8 @@
   "name": "Company status electricity-a",
   "object_id": "company_status_electricity_a",
   "unique_id": "meters_company_status_demo_electricity_a",
-  "state_topic": "meters/casa/status/electricity-a/+",
+  "state_topic": "meters/casa/status/electricity-a/current",
   "value_template": "{{ value_json.state }}",
-  "json_attributes_topic": "meters/casa/status/electricity-a/+",
+  "json_attributes_topic": "meters/casa/status/electricity-a/current",
   "icon": "mdi:send-check"
 }

@@ -1,0 +1,31 @@
+# Merge the `ntfy_publish` key into the existing `rest_command:` block in
+# Home Assistant's configuration.yaml. The full publish URL, including the
+# topic, is the `ntfy_url` secret in secrets.yaml:
+#
+#   ntfy_url: "https://ntfy.sh/<topic>"
+#
+# The topic is a bearer capability: anyone who knows it can read and publish.
+# Keep it out of Git, MQTT, dashboards and notifications.
+#
+# `script.ntfy_notify` calls this command. No MQTT hop and no listener process.
+# Reload with Developer Tools -> YAML -> REST commands (rest_command.reload).
+#
+# Publish to the topic URL as plain text with ntfy headers. Do not post a JSON
+# body to a topic URL: ntfy treats it as the message text.
+
+rest_command:
+  ntfy_publish:
+    url: !secret ntfy_url
+    method: POST
+    content_type: "text/plain; charset=utf-8"
+    payload: "{{ msg }}"
+    headers:
+      Title: "{{ title | default('Raport consum', true) }}"
+      Priority: "{{ priority | default('default', true) }}"
+      Tags: "{{ tags | default('bell', true) }}"
+      Click: "{{ click_url | default('') }}"
+      Actions: >-
+        {%- set has_link = click_url is defined and click_url not in ['', none] -%}
+        {%- if has_link -%}
+        view, {{ label | default('Deschide pagina de raportare', true) }}, {{ click_url }}, clear=true
+        {%- endif -%}

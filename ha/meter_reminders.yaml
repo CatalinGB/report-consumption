@@ -4,11 +4,15 @@ description: >-
   submission for the period. Roles and delivery targets come from the private
   sensor.meter_operations (MQTT schema 3): index_submitter (legacy mother or
   reporter) routes to ntfy, company_submitter (legacy admin) routes to
-  script.notify_admin (Pushover to the admin). reading_mode: external meters
-  are skipped because they are reported outside the index-submitter form. An unavailable or missing
-  submission sensor is treated as unknown, not as unreported, so a broken
-  entity cannot produce a false reminder. One malformed meter is skipped
-  without aborting the rest of the loop.
+  script.notify_admin (Pushover to the admin). A positive company status for the
+  period (proposed/sending/forwarded/accepted/suppressed/blocked/error) also
+  counts as reported, so a company-confirmed index never produces a reminder even
+  if the app's last pointer is stale. reading_mode: external meters are skipped
+  because they are reported outside the index-submitter form. A missing or
+  unavailable submission sensor is skipped so a broken entity cannot produce a
+  false reminder; a registered sensor with no submission yet still counts as
+  unreported. One malformed meter is skipped without aborting the rest of the
+  loop.
 mode: single
 triggers:
   - trigger: time
@@ -76,7 +80,14 @@ actions:
                 {% endif %}
                 {% set sensor = 'sensor.submission_' ~ (meter_id | string | replace('-', '_')) %}
                 {% set last = states(sensor) %}
-                {% set known = last not in ['unknown', 'unavailable', 'none', 'None', ''] %}
+                {# The company status is mirrored to status/<meter>/current by the
+                   current-status automation. A period with a positive status is
+                   reported even if the app's last pointer is stale. #}
+                {% set status = 'sensor.company_status_' ~ (meter_id | string | replace('-', '_')) %}
+                {% set reported = state_attr(status, 'period') == period and
+                   states(status) in ['proposed', 'sending', 'forwarded', 'accepted', 'suppressed', 'blocked', 'error'] %}
+                {% set exists = sensor in (states | map(attribute='entity_id') | list) %}
+                {% set healthy = exists and last not in ['unavailable', 'none', 'None', ''] %}
                 {% set house_id = meter.get('house_id') or '' %}
                 {% set house_matches = houses | selectattr('id', 'equalto', house_id) | list if house_id else [] %}
                 {% set house = house_matches[0] if house_matches else none %}
@@ -91,9 +102,11 @@ actions:
                 {% set luni = ['ianuarie', 'februarie', 'martie', 'aprilie', 'mai', 'iunie', 'iulie', 'august', 'septembrie', 'octombrie', 'noiembrie', 'decembrie'] %}
                 {% set period_label = luni[(period.split('-')[1] | int) - 1] ~ ' ' ~ period.split('-')[0] %}
                 {{ {
-                  'due': in_window and known and last != period,
-                  'unknown': in_window and not known,
+                  'due': in_window and healthy and last != period and not reported,
+                  'unknown': in_window and not healthy,
+                  'reported': reported,
                   'name': meter.get('name') or meter_id,
+                  'kind': meter.get('kind', ''),
                   'house_name': house_name,
                   'period': period,
                   'period_label': period_label,
@@ -115,8 +128,7 @@ actions:
                     - action: script.notify_index_submitter
                       continue_on_error: true
                       data:
-                        url: "https://YOUR_GITHUB_USER.github.io/report-consumption/"
-                        action_label: "Open index reporting page"
+                        kind: "{{ d.kind }}"
               default:
                 - action: script.notify_admin
                   continue_on_error: true
@@ -126,6 +138,3 @@ actions:
                       {{ d.name }}: fereastra este deschisă până la
                       {{ d.close_label }}. Nu ai trimis încă indexul pentru
                       {{ d.period_label }}.
-                    data:
-                      url: "https://YOUR_GITHUB_USER.github.io/report-consumption/admin.html"
-                      url_title: "Open administration"

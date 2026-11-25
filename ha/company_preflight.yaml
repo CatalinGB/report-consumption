@@ -6,12 +6,14 @@ description: >-
   index submitter's `meters/<installation>/event/index` event is handled by
   new_index_notify, which notifies the company submitter once. The proposal is
   written only when the retained status is not already
-  accepted/forwarded/suppressed/sending (or an uncertain error). Where possible
-  it also verifies the last-topic meter id, the submission sensor period and
-  its index and submission id before overwriting a proposal. A payload with
-  `silent: true` updates the last pointer without creating a proposal (used by
-  reading invalidation). `refuse` and `config_error` ranges are never proposed;
-  `config_error` sends one admin diagnostic.
+  accepted/forwarded/suppressed/sending (or an uncertain error). The last pointer
+  must also belong to the meter's current reporting window; a stale pointer from
+  an older period is ignored instead of being re-proposed after every restart.
+  Where possible it also verifies the last-topic meter id, the submission sensor
+  period and its index and submission id before overwriting a proposal. A
+  payload with `silent: true` updates the last pointer without creating a
+  proposal (used by reading invalidation). `refuse` and `config_error` ranges are
+  never proposed; `config_error` sends one admin diagnostic.
 mode: queued
 max: 10
 triggers:
@@ -39,6 +41,31 @@ conditions:
          trigger.payload_json.submitted_at is defined and
          trigger.payload_json.submitted_at is string and
          trigger.topic.split('/') | last == trigger.payload_json.meter_id }}
+  # A retained last pointer can be replayed on every HA restart. Propose only a
+  # reading that belongs to the meter's current (most recently opened) window;
+  # an older period is stale and must not recreate a proposal forever.
+  - condition: template
+    value_template: >-
+      {% set mid = trigger.payload_json.meter_id %}
+      {% set ms = (state_attr('sensor.meters_config', 'meters') or [])
+         | select('mapping') | selectattr('id', 'equalto', mid) | list %}
+      {% set m = ms[0] if ms else none %}
+      {% set w = m.get('window') if m is mapping else none %}
+      {% if m is not mapping or w is not mapping %}
+        true
+      {% else %}
+        {% set n = now() %}
+        {% set od = w.get('open_day', 1) | int %}
+        {% set ot = ((w.get('open_time') or '00:00') | string).split(':') + ['0', '0'] %}
+        {% set oh = [ot[0] | int, 23] | min %}
+        {% set om = [ot[1] | int, 59] | min %}
+        {% set month_end = ((n.replace(day=1) + timedelta(days=32)).replace(day=1) - timedelta(days=1)).day %}
+        {% set od_this = [od, month_end] | min %}
+        {% set open_this = n.replace(day=od_this, hour=oh, minute=om, second=0, microsecond=0) %}
+        {% set current = n.strftime('%Y-%m') if n >= open_this
+           else (n.replace(day=1) - timedelta(days=1)).strftime('%Y-%m') %}
+        {{ trigger.payload_json.period == current }}
+      {% endif %}
 actions:
   - variables:
       payload: "{{ trigger.payload_json }}"

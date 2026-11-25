@@ -64,6 +64,3 @@ actions:
         Anterior: {{ previous if previous is not none else '—' }}.
         Diferență: {{ delta }} {{ unit }}.
         Actualizat: {{ trigger.to_state.last_changed.strftime('%d.%m.%Y %H:%M') }}.
-      data:
-        url: "https://YOUR_GITHUB_USER.github.io/report-consumption/admin.html"
-        url_title: "Open administration"

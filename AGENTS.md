@@ -24,13 +24,17 @@ tests, HA packages, generated data and any future agent working here.
 2. **No PII in ntfy; Pushover is the admin channel.**
    - The index submitter (mother) receives **ntfy** notifications. They must be
      generic: no house/meter name, index, period, address, contract/client code,
-     token, installation id, or other identifier.
+     token, installation id, or other identifier. The utility kind
+     (electricitate/apă/gaz) is allowed, because it is not an identifier.
    - The company submitter (admin) receives **Pushover** notifications on
      `kalioPhone`. Operational detail (meter, index, period, status) is allowed
      there. A physical/contract address is never allowed in any notification.
    - Admin detail must go through `ha/notify_admin.yaml`; mother reminders go
      through `ha/notify_index_submitter.yaml`. Do not bypass these wrappers with
      a direct `ntfy_notify`/Pushover call containing detail.
+   - ntfy is published directly from HA over HTTPS. The topic lives only in
+     `.env.ntfy` and the HA `secrets.yaml` key `ntfy_url`; never in this
+     repository, an MQTT topic, a dashboard or a notification.
 3. **Notification URLs are bare.**
    - No query string, no fragment, no token, no installation id, no index, no
      meter/period/house identifier.
@@ -54,12 +58,13 @@ tests, HA packages, generated data and any future agent working here.
 
 ## Notification design
 
-- Mother/index-submitter ntfy: **generic** “A reporting window is open. Open
-  the index reporting page.”
+- Mother/index-submitter ntfy: **generic**, in Romanian, short:
+  “Raportează index <kind>.” Only the utility kind may vary; no house or meter
+  name.
 - Admin/company-submitter Pushover: detailed operational update on `kalioPhone`;
   never include a physical/contract address.
 - Link actions:
-  - index-submitter reminders → **Open index reporting page**
+  - index-submitter reminders → **Deschide pagina de raportare**
   - admin reminders / new index / company updates → **Open administration**
 - The index URL in a notification is the deployed `index.html` or `admin.html`
   with no query/fragment. The identifier is obtained once from the invite link

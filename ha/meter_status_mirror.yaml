@@ -1,0 +1,99 @@
+# Keeps one retained `meters/<installation>/status/<meter>/current` topic per
+# meter, holding the newest company status by period and updated_at.
+#
+# Discovery for `sensor.company_status_<meter>` reads this topic instead of the
+# `status/<meter>/+` wildcard. Retained per-period statuses can be replayed in
+# any order after an HA restart; the wildcard sensor used to let an old
+# `proposed` status overwrite a newer `accepted` one, which made reminders fire
+# for a meter that was already reported. The current topic is monotonic: the
+# helper below remembers the last period+timestamp per meter, so a late
+# replay of an older period is ignored.
+#
+# `input_text.meters_status_seen` is created in the UI as a text helper with a
+# maximum length of 255. It stores a compact map such as
+# {"meter-a":"2026-11|1795439917"}. It has no `initial`, so HA restores it
+# across restarts.
+#
+# From configuration.yaml:
+#
+#   automation: !include ha/meter_status_mirror.yaml
+#
+alias: "Meters — current status mirror"
+description: >-
+  Mirrors the newest per-period company status to status/<meter>/current so the
+  company-status discovery sensors cannot regress to an older retained period
+  after a restart.
+mode: queued
+max: 200
+triggers:
+  - trigger: mqtt
+    topic: meters/casa/status/+/+
+    qos: 1
+conditions:
+  - condition: template
+    value_template: >-
+      {{ trigger.payload_json is mapping and
+         trigger.payload_json.meter_id is string and
+         trigger.payload_json.period is string and
+         trigger.payload_json.state is string and
+         (trigger.topic.split('/') | length) == 5 and
+         trigger.topic.split('/')[3] == trigger.payload_json.meter_id and
+         trigger.topic.split('/')[4] != 'current' }}
+actions:
+  - variables:
+      meter_id: "{{ trigger.payload_json.meter_id }}"
+      period: "{{ trigger.payload_json.period }}"
+      stamp: >-
+        {{ trigger.payload_json.updated_at or
+           trigger.payload_json.proposed_at or
+           trigger.payload_json.reopened_at or
+           trigger.payload_json.submitted_at or now().isoformat() }}
+      seen_raw: "{{ states('input_text.meters_status_seen') }}"
+      seen: >-
+        {% if seen_raw is mapping %}
+          {{ seen_raw }}
+        {% elif seen_raw is string and seen_raw.startswith('{') %}
+          {{ seen_raw | from_json }}
+        {% else %}
+          {}
+        {% endif %}
+      old: "{{ seen.get(meter_id, '') }}"
+      old_period: "{{ old.split('|')[0] if old else '' }}"
+      old_stamp: "{{ (old.split('|')[1] if '|' in old else '0') | int(0) }}"
+      # The helper can be empty after a restore or a manual reset. The discovery
+      # sensor and the submission pointer are independent floors, so an old
+      # retained period still cannot overwrite a newer one.
+      status_e: "sensor.company_status_{{ meter_id | string | replace('-', '_') }}"
+      sub_e: "sensor.submission_{{ meter_id | string | replace('-', '_') }}"
+      floor_period: >-
+        {% set sp = state_attr(status_e, 'period') or '' %}
+        {% set sub = states(sub_e) %}
+        {% set sub_period = sub if (sub is string and sub | length == 7 and sub[4] == '-') else '' %}
+        {{ [old_period, sp, sub_period] | max }}
+      floor_stamp: >-
+        {% set fs = state_attr(status_e, 'updated_at') or
+                    state_attr(status_e, 'proposed_at') or
+                    state_attr(status_e, 'reopened_at') or
+                    state_attr(status_e, 'submitted_at') %}
+        {{ as_timestamp(fs, 0) | int(0) if fs else 0 }}
+      stamp_ts: "{{ as_timestamp(stamp, 0) | int(0) }}"
+      fresh: >-
+        {{ (period > floor_period) or
+           (period == floor_period and stamp_ts >= ([old_stamp, floor_stamp] | max)) }}
+      merged: "{{ (seen | combine({meter_id: period ~ '|' ~ stamp_ts})) | tojson }}"
+  - if:
+      - condition: template
+        value_template: "{{ fresh }}"
+    then:
+      - action: input_text.set_value
+        continue_on_error: true
+        target:
+          entity_id: input_text.meters_status_seen
+        data:
+          value: "{{ merged }}"
+      - action: mqtt.publish
+        data:
+          topic: "meters/casa/status/{{ meter_id }}/current"
+          qos: 1
+          retain: true
+          payload: "{{ trigger.payload }}"

@@ -50,8 +50,17 @@ in Flespi; the submission payload uses `submitted_by: index_submitter` or
    last 24h and the meter is still unreported.
 
 A submission for the period makes the next reminder and close alert skip that
-meter. A late submission still counts. An unavailable or missing submission
-sensor is treated as **unknown**, not as unreported, and produces no reminder.
+meter. A late submission still counts. A positive company status for the period
+(`proposed`, `sending`, `forwarded`, `accepted`, `suppressed`, `blocked`,
+`error`) also counts as reported: the index reached the company even if the
+app's `last` pointer is stale. `reopened` and `invalidated` do not count. The
+company-status entity reads the single retained `status/<meter>/current` topic,
+so a restart cannot replay an older period over a newer one.
+
+`company_preflight` ignores a `last` pointer whose period is not the meter's
+current reporting window, so a stale retained pointer cannot recreate an old
+proposal after every restart. An unavailable or missing submission sensor is
+treated as **unknown**, not as unreported, and produces no reminder.
 
 ## Private mapping (schema 3)
 
@@ -221,30 +230,22 @@ index notification; `company_preflight` no longer duplicates it.
 
 ```text
 script.notify_index_submitter -> script.ntfy_notify
-  -> meters/casa/status/ntfy (non-retained)
-  -> Mosquitto bridge -> Flespi
-  -> tools/ntfy-listener.js -> ntfy.sh/<local-topic>
+  -> rest_command.ntfy_publish
+  -> https://ntfy.sh/<topic> (one HTTPS POST)
 ```
 
-Run the listener on an always-on host:
+The publish URL lives only in the HA secret `ntfy_url` (full URL including the
+topic) and in `.env.ntfy` for the CLI tools. It is never in this repository, in
+MQTT or in a message. Reload REST commands after editing the YAML. Full setup
+and rotation are in [`notifications.md`](notifications.md).
 
-```bash
-node tools/ntfy-listener.js
-```
+The JSON body includes `actions` with the `action_label`, so the reminder shows
+a visible **Deschide pagina de raportare** button.
 
-It reads `.env.ntfy` (mode 600, gitignored) and
-`REPORT_CONSUMPTION_HOME_TOKEN` from `.env.tokens`. The ntfy topic never enters
-Home Assistant or Git. Full setup and rotation are in
-[`notifications.md`](notifications.md).
-
-The envelope includes `action_label`. The listener sends it as an ntfy `actions`
-entry so the index-submitter reminder shows a visible **Open index reporting
-page** button.
-
-If the listener is down, the index-submitter reminder is lost. The admin
-Pushover path is independent. If Pushover fails, `script.notify_admin` raises
-an error instead of reporting success; callers in loops use
-`continue_on_error` so the loop continues.
+If ntfy is unreachable the reminder for that day is lost; the admin Pushover
+path is independent. If Pushover fails, `script.notify_admin` raises an error
+instead of reporting success; callers in loops use `continue_on_error` so the
+loop continues.
 
 ## Health
 
@@ -324,17 +325,18 @@ tested restore exists.
 
 ### Reminder missing for a manual meter
 
-- Check `sensor.submission_<meter>`: `unknown`/`unavailable` is treated as
-  unknown and suppresses the reminder by design.
+- Check `sensor.submission_<meter>`: a missing or `unavailable` entity is
+  skipped by design; `unknown` on a registered entity counts as "not submitted
+  yet" and does not suppress the reminder.
 - Check the window open/close day and time.
 - Check the automation trace; one malformed meter is skipped, not fatal.
 
 ### ntfy notification missing
 
-- Check the listener log for `ntfy listener: sent ...` and MQTT connection
-  messages.
-- Check `script.ntfy_notify` and the automation trace; the script must publish
-  to `meters/casa/status/ntfy`.
+- Check the automation trace; `script.ntfy_notify` must call
+  `rest_command.ntfy_publish`.
+- Check the HA log for a `rest_command.ntfy_publish` error (DNS, TLS, HTTP
+  status). HA needs outbound HTTPS to `ntfy.sh`.
 - Verify the phone is subscribed to the current topic after a rotation.
 - The admin Pushover path is independent; a missing ntfy message means the
   index submitter may not have been reminded.
@@ -483,11 +485,11 @@ migrated. Test against the real retained config before deployment.
 - Re-mint the reporter token to allow `event/index`, or use the current token
   only after its ACL is updated.
 - Deploy the updated `ntfy_notify`, `notify_index_submitter` and `notify_admin`
-  scripts, then restart the ntfy listener so `action_label` renders.
-- Confirm the index submitter has the ntfy app subscribed to the topic.
+  scripts, and add `rest_command.ntfy_publish` to `configuration.yaml`.
+- Confirm the index submitter and the admin have the ntfy app subscribed to the
+  topic.
 - Set the real provider windows and baselines (kept private).
 - Confirm the admin Pushover target is `kalioPhone`.
-- Run the ntfy listener as a persistent service.
 - Enable Mosquitto persistence.
 - Create the new Flespi Master and rotation calendar.
 - Run one real cycle across House B, gas and water.

@@ -220,7 +220,7 @@
       }
       if (topic.indexOf(statusPrefix) === 0) {
         var srest = topic.slice(statusPrefix.length).split("/");
-        if (srest.length >= 2) {
+        if (srest.length >= 2 && srest[1] !== "current") {
           var statusKey = srest[0] + "|" + srest[1];
           var statusText = payload ? payload.toString() : "";
           if (!statusText) {

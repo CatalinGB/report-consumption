@@ -50,9 +50,8 @@ Legend: **P0** = blocker, **P1** = needed before calling the system mature,
       mother/index-submitter reminders call `script.notify_index_submitter`
       (generic ntfy). ntfy is no longer used for admin messages.
 - [x] Local ntfy topic generated with `uuid.uuid4()`, stored in the gitignored
-      `.env.ntfy` (mode 600), and the HA -> MQTT -> Flespi -> listener path was
-      tested.
-- [ ] Run `tools/ntfy-listener.js` as a persistent service on an always-on host.
+      `.env.ntfy` (mode 600) and in the HA `ntfy_url` secret; HA posts to ntfy
+      directly over HTTPS (`rest_command.ntfy_publish`).
 - [x] Real HA package and bridge config are kept in the private local directory.
 
 ## CATD water e-mail

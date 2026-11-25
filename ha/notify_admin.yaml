@@ -48,13 +48,17 @@ fields:
       text:
 
 sequence:
+  - variables:
+      admin_page: >-
+        {{ admin_url | default('https://YOUR_GITHUB_USER.github.io/report-consumption/admin.html', true) }}
+
   - if:
       - condition: template
         value_template: >-
           {{ (data is mapping and data.url is defined and data.url != '' and
               (('?' in data.url) or ('#' in data.url))) or
-             (admin_url is defined and admin_url != '' and
-              (('?' in admin_url) or ('#' in admin_url))) }}
+             (admin_page != '' and
+              (('?' in admin_page) or ('#' in admin_page))) }}
     then:
       - stop: "refusing notification URL with query/fragment identifier"
 
@@ -64,7 +68,7 @@ sequence:
       title: "{{ title }}"
       message: "{{ message }}"
       data:
-        url: "{{ (data.get('url', '') if data is mapping else '') or admin_url }}"
+        url: "{{ (data.get('url', '') if data is mapping else '') or admin_page }}"
         url_title: "{{ (data.get('url_title', '') if data is mapping else '') or 'Open administration' }}"
 
 mode: parallel

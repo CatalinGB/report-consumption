@@ -1,0 +1,65 @@
+# Clears `meters/<installation>/status/<meter>/current` when the app deletes
+# the matching per-period status (reset or invalidation).
+#
+# The app publishes an empty retained payload to `status/<meter>/<period>` when
+# it removes a reading. Without this companion, the current discovery sensor
+# would keep the old `accepted` status and suppress reminders for a meter that
+# was reset. The companion removes the meter from the high-water mark and
+# clears the retained current topic.
+#
+# From configuration.yaml:
+#
+#   automation: !include ha/meter_status_clear.yaml
+#
+alias: "Meters — clear current status"
+description: >-
+  Clears status/<meter>/current when the app deletes the matching per-period
+  status (reset or invalidation), so a reset meter cannot keep an old accepted
+  status and suppress reminders.
+mode: queued
+max: 200
+triggers:
+  - trigger: mqtt
+    topic: meters/casa/status/+/+
+    qos: 1
+conditions:
+  - condition: template
+    value_template: >-
+      {{ (trigger.payload is not defined or trigger.payload in [none, '']) and
+         (trigger.topic.split('/') | length) == 5 and
+         trigger.topic.split('/')[4] != 'current' }}
+actions:
+  - variables:
+      meter_id: "{{ trigger.topic.split('/')[3] }}"
+      period: "{{ trigger.topic.split('/')[4] }}"
+      status_e: "sensor.company_status_{{ meter_id | string | replace('-', '_') }}"
+      seen_raw: "{{ states('input_text.meters_status_seen') }}"
+      seen: >-
+        {% if seen_raw is mapping %}
+          {{ seen_raw }}
+        {% elif seen_raw is string and seen_raw.startswith('{') %}
+          {{ seen_raw | from_json }}
+        {% else %}
+          {}
+        {% endif %}
+      old: "{{ seen.get(meter_id, '') }}"
+      old_period: "{{ old.split('|')[0] if old else '' }}"
+      current_period: "{{ state_attr(status_e, 'period') or '' }}"
+      should_clear: "{{ old_period == period or current_period == period }}"
+      merged: "{{ (seen | combine({meter_id: ''})) | tojson }}"
+  - if:
+      - condition: template
+        value_template: "{{ should_clear }}"
+    then:
+      - action: input_text.set_value
+        continue_on_error: true
+        target:
+          entity_id: input_text.meters_status_seen
+        data:
+          value: "{{ merged }}"
+      - action: mqtt.publish
+        data:
+          topic: "meters/casa/status/{{ meter_id }}/current"
+          qos: 1
+          retain: true
+          payload: ""

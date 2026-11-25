@@ -2,8 +2,10 @@ alias: "Meters — close alert"
 description: >-
   Sends the company submitter one admin alert at 10:05 when a meter's reporting
   window closed within the last 24 hours and that meter still has no submission
-  for the period. reading_mode: external meters are skipped. An unavailable or
-  missing submission sensor is treated as unknown, not as unreported. A
+  for the period. A positive company status for the period also counts as
+  reported. reading_mode: external meters are skipped. A missing or unavailable
+  submission sensor is skipped so a broken entity cannot produce a false alert;
+  a registered sensor with no submission yet still counts as unreported. A
   malformed meter is skipped without aborting the loop.
 mode: single
 triggers:
@@ -72,7 +74,13 @@ actions:
                 {% endif %}
                 {% set sensor = 'sensor.submission_' ~ (meter_id | string | replace('-', '_')) %}
                 {% set last = states(sensor) %}
-                {% set known = last not in ['unknown', 'unavailable', 'none', 'None', ''] %}
+                {# A positive company status for the period means the index was
+                   reported even if the app's last pointer is stale. #}
+                {% set status = 'sensor.company_status_' ~ (meter_id | string | replace('-', '_')) %}
+                {% set reported = state_attr(status, 'period') == period and
+                   states(status) in ['proposed', 'sending', 'forwarded', 'accepted', 'suppressed', 'blocked', 'error'] %}
+                {% set exists = sensor in (states | map(attribute='entity_id') | list) %}
+                {% set healthy = exists and last not in ['unavailable', 'none', 'None', ''] %}
                 {% set house_id = meter.get('house_id') or '' %}
                 {% set house_matches = houses | selectattr('id', 'equalto', house_id) | list if house_id else [] %}
                 {% set house = house_matches[0] if house_matches else none %}
@@ -82,8 +90,9 @@ actions:
                 {% set luni = ['ianuarie', 'februarie', 'martie', 'aprilie', 'mai', 'iunie', 'iulie', 'august', 'septembrie', 'octombrie', 'noiembrie', 'decembrie'] %}
                 {% set period_label = luni[(period.split('-')[1] | int) - 1] ~ ' ' ~ period.split('-')[0] %}
                 {{ {
-                  'due': closed and known and last != period,
-                  'unknown': closed and not known,
+                  'due': closed and healthy and last != period and not reported,
+                  'unknown': closed and not healthy,
+                  'reported': reported,
                   'name': meter.get('name') or meter_id,
                   'house_name': house_name,
                   'period': period,
@@ -106,6 +115,3 @@ actions:
                   {{ d.name }}: fereastra pentru {{ d.period_label }} s-a închis
                   la {{ d.close_label }} și nu există nicio trimitere.
                   Responsabil: {{ 'index submitter' if d.route_target == 'index_submitter' else 'company submitter' }}.
-                data:
-                  url: "https://YOUR_GITHUB_USER.github.io/report-consumption/admin.html"
-                  url_title: "Deschide administrarea"

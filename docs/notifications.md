@@ -1,28 +1,19 @@
-# Notifications — ntfy.sh
+# Notifications — ntfy
 
-Report Consumption uses MQTT as the transport for its operational
-notifications. A small local listener subscribes to one status topic and
-forwards the envelope to an [ntfy.sh](https://ntfy.sh) topic. The ntfy topic is a
-secret: it is generated locally, stored in `.env.ntfy` (gitignored, mode 600),
-and never committed or placed in Home Assistant.
-
-## Why a listener, not an HA YAML notify platform
-
-This Home Assistant has no configured ntfy notify platform. The MQTT listener
-keeps the topic off the HA configuration and works with the existing Flespi
-bridge:
+Report Consumption sends index-submitter reminders to an
+[ntfy.sh](https://ntfy.sh) topic straight from Home Assistant over HTTPS.
+There is no MQTT hop and no listener process:
 
 ```text
-HA script.ntfy_notify
-  -> meters/<installation>/status/ntfy (local Mosquitto)
-  -> Flespi bridge (status/# out)
-  -> Flespi
-  -> tools/ntfy-listener.js
-  -> https://ntfy.sh/<local-topic>
+HA script.notify_index_submitter
+  -> script.ntfy_notify
+  -> rest_command.ntfy_publish
+  -> https://ntfy.sh/<topic>  (one POST, JSON body)
+  -> phone
 ```
 
-The listener needs the home MQTT token and the local ntfy topic. Both are local
-files; neither is part of the public repository.
+The admin (company submitter) is notified separately on Pushover through
+`script.notify_admin`; that path never touches ntfy.
 
 ## Privacy rule
 
@@ -32,7 +23,18 @@ generic; the admin receives operational detail on Pushover. Links must be bare
 page URLs with no query or fragment. Details are visible only after opening the
 app.
 
-## 1. Create the local topic
+## The topic is a secret
+
+The ntfy topic is generated locally and is a bearer capability: anyone who
+knows it can read the messages and publish to it. Keep it in:
+
+- `.env.ntfy` on the machine that runs the CLI tools (mode 600, gitignored);
+- the HA `secrets.yaml` key `ntfy_url` (the full publish URL).
+
+Never put it in this repository, an MQTT topic, a dashboard, a notification, a
+commit or an issue.
+
+## 1. Create the topic
 
 ```bash
 python3 - <<'PY'
@@ -41,112 +43,113 @@ print("https://ntfy.sh/" + str(uuid.uuid4()))
 PY
 ```
 
-`uuid.uuid4()` reads from the operating system CSPRNG. Save the UUID only in
-`.env.ntfy`:
+Save it in `.env.ntfy`:
 
 ```dotenv
 NTFY_TOPIC=<uuid>
 NTFY_URL=https://ntfy.sh/<uuid>
 ```
 
-The repository already ignores `.env.ntfy`. Do not put the UUID in a dashboard,
-a notification message, a Git commit, or an issue.
+and in Home Assistant's `secrets.yaml`:
 
-If the topic is exposed, generate a new UUID and update `.env.ntfy`; the old
-topic can no longer receive the listener's messages.
+```yaml
+ntfy_url: "https://ntfy.sh/<uuid>"
+```
+
+If the topic is exposed, generate a new UUID, update both places, and
+resubscribe the phones. The old topic goes silent.
 
 ## 2. Subscribe on the phone
 
 Install the ntfy Android/iOS app and subscribe to the topic (or open
-`https://ntfy.sh/<topic>` once). Use a separate topic per installation if you
-run more than one.
+`https://ntfy.sh/<topic>` once). The index submitter and the admin may both
+subscribe; the same generic message reaches both.
 
-The topic is a bearer capability: anyone who knows it can publish or read.
-Treat it like a password.
+## 3. Home Assistant configuration
 
-## 3. Run the listener
+Add the `ntfy_publish` command to the existing `rest_command:` block in
+`configuration.yaml` — the snippet is in
+[`ha/rest_command-ntfy.example.yaml`](../ha/rest_command-ntfy.example.yaml):
 
-The listener is an ordinary Node process; it needs the same `mqtt` dependency as
-the bridge healthcheck.
-
-```bash
-cd /path/to/report-consumption
-node tools/ntfy-listener.js
+```yaml
+rest_command:
+  ntfy_publish:
+    url: !secret ntfy_url
+    method: POST
+    content_type: "application/json"
+    payload: >-
+      ... (see the example file)
 ```
 
-It reads:
+Reload REST commands after editing: **Settings → Tools → YAML → REST commands**
+(or `rest_command.reload`). A restart is not needed.
 
-- `.env.tokens` → `REPORT_CONSUMPTION_HOME_TOKEN` (Flespi home token);
-- `.env.ntfy` → `NTFY_TOPIC` and `NTFY_URL`.
+HA must be able to reach `https://ntfy.sh` outbound on port 443.
 
-The Flespi home token is backend-only. Do not put it in the browser page.
-
-For a persistent service, run it on the same host as the Mosquitto bridge (or
-any always-on host with MQTT access) under systemd or as a Docker service. A
-minimal systemd unit:
-
-```ini
-[Unit]
-Description=Report Consumption ntfy listener
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-WorkingDirectory=/path/to/report-consumption
-ExecStart=/usr/bin/node tools/ntfy-listener.js
-Restart=always
-RestartSec=10
-User=kalio
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Use `Environment=RC_INSTALLATION=casa` only if the installation id is not
-`casa`. The listener logs titles and the non-secret MQTT status topic; it never prints the ntfy topic or token.
-
-## 4. Home Assistant scripts
+## 4. Scripts
 
 Import [`ha/ntfy_notify.yaml`](../ha/ntfy_notify.yaml) as a script named
-`ntfy_notify`, then import [`ha/notify_index_submitter.yaml`](../ha/notify_index_submitter.yaml)
-as `notify_index_submitter`. The admin uses
-[`ha/notify_admin.yaml`](../ha/notify_admin.yaml) for Pushover to `kalioPhone`;
-that path is separate and does not call ntfy.
+`ntfy_notify`, then import
+[`ha/notify_index_submitter.yaml`](../ha/notify_index_submitter.yaml) as
+`notify_index_submitter`. The admin uses
+[`ha/notify_admin.yaml`](../ha/notify_admin.yaml) for Pushover to `kalioPhone`.
 
-`script.ntfy_notify` publishes:
+`script.ntfy_notify` posts the message as the request body and sends the
+metadata as headers:
 
-```json
-{
-  "v": 1,
-  "title": "Report consumption",
-  "message": "A meter is ready",
-  "priority": "high",
-  "tags": "bell",
-  "url": "https://example.invalid/",
-  "action_label": "Open index reporting page",
-  "at": "2026-10-20T18:00:00+03:00"
-}
+| Header | Value |
+|--------|-------|
+| `Title` | `Raport consum` |
+| `Priority` | `default` |
+| `Tags` | `bell` |
+| `Click` | bare page URL, e.g. `https://example.invalid/` |
+| `Actions` | `view, Deschide pagina de raportare, https://example.invalid/, clear=true` |
+
+The body is short and generic, with only the utility kind varying:
+
+```text
+Raportează index electricitate
 ```
 
-to `meters/casa/status/ntfy` with QoS 1 and `retain: false`. The listener maps
-`action_label` to a visible ntfy action button. `script.notify_index_submitter`
-calls it with generic text; the admin uses `script.notify_admin` on Pushover and
-never routes detail through ntfy.
+`kind` comes from the meter config (`electricity`, `water`, `gas`) and is never
+a house or meter name. `script.notify_index_submitter` fills it in;
+`script.notify_admin` stays on Pushover and never routes detail through ntfy.
 
-Index-submitter reminders call `script.notify_index_submitter`. Admin alerts
-call `script.notify_admin` with the normal Pushover fields. Never route admin
-detail through ntfy.
+## When no reminder is sent
+
+A meter is **reported** when either:
+
+- `sensor.submission_<meter>` holds the period of the current reporting window;
+  or
+- `sensor.company_status_<meter>` holds that period with a positive state:
+  `proposed`, `sending`, `forwarded`, `accepted`, `suppressed`, `blocked` or
+  `error`.
+
+`reopened` and `invalidated` do not count. The check is per meter: reporting
+one meter never suppresses a reminder for another meter or utility. A `reported`
+meter also suppresses the close alert.
+
+The company status entity reads the single retained
+`meters/casa/status/<meter>/current` topic, not the `status/<meter>/+` wildcard.
+The wildcard let an old retained `proposed` period overwrite a newer `accepted`
+one after a restart, which is how a reported meter kept producing reminders.
+[`ha/meter_status_mirror.yaml`](../ha/meter_status_mirror.yaml) maintains the
+current topic monotonically.
+
+There is **one** scheduled reminder (10:00) and one close alert (10:05). Do not
+add a second “missing submission” watchdog: it duplicates the daily reminder and
+will double-notify the admin.
 
 ## 5. Test
 
-Send one message without waiting for a meter event:
+Publish straight to ntfy from a machine with `.env.ntfy`:
 
 ```bash
 node tools/ntfy-notify.js \
-  --title "Report consumption test" \
-  --message "The local ntfy listener is working." \
-  --priority default
+  --title "Raport consum test" \
+  --message "Test de livrare." \
+  --url https://example.invalid/ \
+  --action-label "Deschide pagina de raportare"
 ```
 
 Then trigger the HA path:
@@ -154,29 +157,25 @@ Then trigger the HA path:
 ```yaml
 action: script.ntfy_notify
 data:
-  title: Report consumption test
-  message: The MQTT to ntfy path is working.
+  title: Raport consum test
+  message: Test de livrare.
   priority: default
   tags: bell
+  url: https://example.invalid/
+  action_label: Deschide pagina de raportare
 ```
 
-You should see the message in the ntfy app and a line in the listener log:
-
-```text
-ntfy listener: sent Report consumption test
-```
-
-The test message must not contain a real meter index, contract number, address,
-or token.
+A successful test appears in the ntfy app and in the HA log as a
+`rest_command.ntfy_publish` call. The test message must not contain a real meter
+index, contract number, address, or token.
 
 ## 6. Rotation and failure handling
 
-- **Rotate the ntfy topic:** generate a new UUID, update `.env.ntfy`, restart the
-  listener, and subscribe the phone to the new topic.
-- **Listener down:** the index submitter misses the ntfy reminder; the MQTT
-  notification envelope is non-retained, so it is not replayed later. The admin
-  Pushover path is independent.
-- **MQTT down:** the listener reconnects every 5 seconds; HA's `continue_on_error`
-  keeps the admin Pushover path independent.
-- **Topic leaked:** rotate immediately. A UUID alone does not grant MQTT access;
-  the Flespi token is a separate secret.
+- **Rotate the topic:** generate a new UUID, update `.env.ntfy` and the
+  `ntfy_url` secret, reload REST commands, and resubscribe the phones.
+- **ntfy unreachable:** `rest_command` logs the failed request; the reminder is
+  not retried. The admin Pushover path is independent.
+- **Reminder skipped:** nothing retries a missed daily reminder. The window
+  logic in `automation.meters_daily_reminder` decides the next run.
+- **Topic leaked:** rotate immediately. The topic grants ntfy access only; it
+  does not grant MQTT or HA access.

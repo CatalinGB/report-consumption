@@ -11,11 +11,12 @@
     "backup": "node tools/export-mqtt.js",
     "healthcheck": "node tools/healthcheck-bridge.js",
     "healthcheck:state": "node tools/healthcheck-state.js",
-    "ntfy:send": "node tools/ntfy-notify.js",
-    "ntfy:listen": "node tools/ntfy-listener.js"
+    "ntfy:send": "node tools/ntfy-notify.js"
+  },
+  "dependencies": {
+    "mqtt": "^5.16.1"
   },
   "devDependencies": {
-    "mqtt": "^5.16.1",
     "playwright": "^1.64.1"
   },
   "engines": {

@@ -18,28 +18,39 @@ fields:
     default: "https://YOUR_GITHUB_USER.github.io/report-consumption/"
     selector:
       text:
+  kind:
+    name: Meter kind
+    description: electricity, water or gas; only the kind, never a house or meter name.
+    default: ""
+    selector:
+      text:
   action_label:
     name: Action label
-    default: "Open index reporting page"
+    default: "Deschide pagina de raportare"
     selector:
       text:
 
 sequence:
+  - variables:
+      reporter_url: >-
+        {{ url | default('https://YOUR_GITHUB_USER.github.io/report-consumption/', true) }}
+
   - if:
       - condition: template
         value_template: >-
-          {{ url is defined and url != '' and (('?' in url) or ('#' in url)) }}
+          {{ reporter_url != '' and (('?' in reporter_url) or ('#' in reporter_url)) }}
     then:
       - stop: "refusing notification URL with query/fragment identifier"
 
   - action: script.ntfy_notify
     data:
-      title: "Report consumption"
-      message: "A reporting window is open. Open the index reporting page."
+      title: "Raport consum"
+      message: >-
+        {% set kind_label = {'electricity': 'electricitate', 'water': 'apă', 'gas': 'gaz'}.get(kind | default('', true), '') %}Raportează index{% if kind_label %} {{ kind_label }}{% else %}ul{% endif %}
       priority: "default"
       tags: "bell"
-      url: "{{ url }}"
-      action_label: "{{ action_label | default('Open index reporting page') }}"
+      url: "{{ reporter_url }}"
+      action_label: "{{ action_label | default('Deschide pagina de raportare') }}"
 
 mode: parallel
 max: 20

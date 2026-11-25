@@ -1,5 +1,5 @@
 /* Report Consumption — service worker (PWA install + offline shell). */
-var CACHE = "report-consumption-v13";
+var CACHE = "report-consumption-v14";
 var ASSETS = [
   "./", "./index.html", "./admin.html",
   "./css/app.css",

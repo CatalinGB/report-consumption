@@ -259,7 +259,7 @@ template:
 ## Notification link
 
 Reminder notifications published to ntfy include a visible action labelled
-**Open index reporting page**, pointing at the reporter page. Provider/new-index
+**Deschide pagina de raportare**, pointing at the reporter page. Provider/new-index
 notifications can carry a separate **Open administration** action pointing at
 the admin page.
 

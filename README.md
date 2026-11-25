@@ -19,9 +19,14 @@ No backend. No database. The page never reads Home Assistant at runtime.
 - **Home Assistant** — private notification/provider mapping, reminders,
   smart-water watcher, close alert, company preflight, explicit approve/suppress
   and a bridge heartbeat.
-- **Notifications** — the index submitter uses a local MQTT-to-ntfy listener
-  (generic, PII-free); the company submitter uses Pushover on `kalioPhone` with
-  operational detail. The ntfy topic stays in a gitignored local file.
+- **Admin dashboard** — `kalio-contoare/contoare` shows the current action list,
+  every meter's window/submission/company/provider state, approve/suppress/reopen
+  controls, system health and the full end-user guide
+  ([`docs/end-user-guide.md`](docs/end-user-guide.md)).
+- **Notifications** — the index submitter gets a generic ntfy reminder posted
+  directly from HA over HTTPS; the company submitter uses Pushover on
+  `kalioPhone` with operational detail. The ntfy topic stays in a gitignored
+  local file and the HA `secrets.yaml`.
   See [`docs/notifications.md`](docs/notifications.md). The decision-ready user flows are in
 [`docs/user-flows.md`](docs/user-flows.md).
 - **Multi-house** — one installation can contain several houses; the reporter

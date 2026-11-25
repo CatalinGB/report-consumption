@@ -1,7 +1,7 @@
 "use strict";
 
 /*
- * Small ntfy.sh client shared by the CLI and the MQTT listener.
+ * Small ntfy.sh client shared by the CLI tools.
  *
  * The topic is a local secret. It lives in `.env.ntfy` (mode 600, gitignored)
  * and is never printed by these tools.
